@@ -1,1 +1,1 @@
-# Diplomamunka
+# Neurális Hálók alkalmazása az Isogeomertikus Analízis során

@@ -70,25 +70,27 @@ def get_gauss_points(nGp=2):
 
 if __name__ == "__main__":
    k = 2
-   t = [0, 1, 2, 3, 4, 5]
-   c = [1, 1, 1, 1]
-   from scipy.interpolate import BSpline
-   spl = BSpline(t, c, k)
    import matplotlib.pyplot as plt
    import numpy as np
    fig, ax = plt.subplots()
    xx = np.linspace(1.5, 4.5, 500)
-   t = [0,0, 1, 2, 3, 4, 5, 6,6]
+   xx2 = np.linspace(0, 10, 500)
+   t = [ 1,1,1, 2, 3, 4,5,6,7,8,9,10,10,10]
+   t2 = [4,0, 1, 2, 3, 4, 5, 6,6]
    c = [1,1,1,1,1,1,1,1,1,1,1,1]
-   ax.plot(xx, [bspline(x, t, c ,k) for x in xx], 'r-', lw=3, label='naive')
+   #ax.plot(xx, [bspline(x, t, c ,k) for x in xx], 'r-', lw=3, label='naive')
+   ax.plot(xx2, [bspline(x, t, c ,k) for x in xx2], 'g-', lw=3, label='naive')
    #ax.plot(xx, spl(xx), 'b-', lw=4, alpha=0.7, label='BSpline')
    ax.grid(True)
    ax.legend(loc='best')
 
    for i in range(len(t)-k-1):
-      Ni = [B(x,k,i,t) for x in xx]
-      diff = [(Ni[idx]-Ni[idx-1])/(xx[1]-xx[0]) for idx,x in enumerate(Ni)]
-      ax.plot(xx, Ni)
-      #ax.plot(xx, [dBdXi(x,k,i,t) for x in xx])
-      #ax.plot(xx[1:], diff[1:])
+      #if i == 0 or i== len(t)-k-1-1: continue
+      #Ni = [B(x,k,i,t) for x in xx]
+      Ni2 = [B(x,k,i,t) for x in xx2]
+      #diff = [(Ni2[idx]-Ni2[idx-1])/(xx2[1]-xx2[0]) for idx,x in enumerate(Ni2)]
+      #ax.plot(xx, Ni)2
+      ax.plot(xx2, Ni2)
+      ax.plot(xx2, [dBdXi(x,k,i,t) for x in xx2])
+      #ax.plot(xx2[1:], diff[1:])
    plt.show()

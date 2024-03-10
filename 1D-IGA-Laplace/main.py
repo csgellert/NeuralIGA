@@ -11,7 +11,7 @@ xB = 2
 l = xB-xA # length of the domain
 
 #Number of points
-N = 4
+N = 6
 p = 3 #quadratic B-splines
 
 # defining the domain 

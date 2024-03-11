@@ -13,7 +13,7 @@ def get_denominator(k,u,weigths, knotvector,order):
     for i in range(1-1,k):
         sum += weigths[i]*B(u,order,i,knotvector)
     return sum
-def get_nominator(k,u,weigths, knotvector,order,ctrlpts):
+def get_numerator(k,u,weigths, knotvector,order,ctrlpts):
     sum = np.array([0,0,0],dtype='float64')
     # amit a  Wikipédia u-nak jelöl az az x a mi esetünkben...
     for i in range(1-1,k):
@@ -22,7 +22,7 @@ def get_nominator(k,u,weigths, knotvector,order,ctrlpts):
         wtmp = weigths[i]
         sum += weigths[i]*B(u,order,i,knotvector)*np.array(ctrlpts[i])
     return list(sum)
-def get_denominator2d(k,l,u,w,weigths, knotvector_u,knotvector_w,p,q):
+def get_denominatorSurf(k,l,u,w,weigths, knotvector_u,knotvector_w,p,q):
     sum = 0
     # amit a  Wikipédia u-nak jelöl az az x a mi esetünkben...
     for i in range(1-1,k):
@@ -35,7 +35,7 @@ def get_denominator2d(k,l,u,w,weigths, knotvector_u,knotvector_w,p,q):
         sum=1
     return sum
 
-def get_nominator2d(k,l,u,w,weigths, knotvector_u,knotvector_w,p,q,ctrlpts):
+def get_numeratorSurf(k,l,u,w,weigths, knotvector_u,knotvector_w,p,q,ctrlpts):
     sum = np.array([0,0,0],dtype='float64')
     # amit a  Wikipédia u-nak jelöl az az x a mi esetünkben...
     for i in range(1-1,k):
@@ -46,14 +46,14 @@ def get_nominator2d(k,l,u,w,weigths, knotvector_u,knotvector_w,p,q,ctrlpts):
     return list(sum)
 
 def Curve(k,u,weigths, knotvector,order,ctrlpts):
-    C = get_nominator(k,u,weigths, knotvector,order,ctrlpts)/get_denominator(k,u,weigths, knotvector,order)
+    C = get_numerator(k,u,weigths, knotvector,order,ctrlpts)/get_denominator(k,u,weigths, knotvector,order)
     return C
 
 def Surface(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q,ctrlpts):
-    n = get_nominator2d(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q,ctrlpts)
+    n = get_numerator2d(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q,ctrlpts)
     d = get_denominator2d(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
     tmp = n/d
-    S = get_nominator2d(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q,ctrlpts)/get_denominator2d(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
+    S = get_numeratorSurf(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q,ctrlpts)/get_denominatorSurf(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
     if math.isnan(S[0]):
         S = 0
     return S
@@ -82,7 +82,7 @@ def plotcurve(curvepoints,ctrlpoints,weigths):
     ax.scatter(x,y,z,c="r",marker="*")
     
     plt.show()
-def plot_surface(surface):
+def plot_surface(surface,ctrlpts):
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
     xPoints = []
@@ -99,6 +99,16 @@ def plot_surface(surface):
 
     #ax.plot_surface(xBezier,yBezier,zBezier)
     ax.scatter(xPoints,yPoints,zPoints)#, edgecolors='face')
+    #plot controlpoints:
+    x=[]
+    y=[]
+    z=[]
+    for j in ctrlpts:
+        for i in j:
+            x.append(i[0])
+            y.append(i[1])
+            z.append(i[2])
+    ax.scatter(x,y,z,c="r",marker="*")
     plt.show()
 
 
@@ -159,4 +169,4 @@ if __name__== "__main__":
             Surfacepoints.append(srf)
         #print(Curvepoints)
         print(Surfacepoints)
-        plot_surface(Surfacepoints)
+        plot_surface(Surfacepoints, ctrlpts)

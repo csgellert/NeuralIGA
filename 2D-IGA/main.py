@@ -1,74 +1,32 @@
-import numpy as np
-import matplotlib.pyplot as plt
+from NURBS import *
 
-x = np.array([[-0.5, -2, 0], [1,1,1], [2,2,2]])
-y = np.array([[2, 1,0], [2,0,1], [2,1,1]])
-z = np.array([[1, -1,2], [0,-0.5,2], [0.5,1,2]])
+#defining geometry:
+p = 1
+q = 2
+ctrlpts=   [[[0,0,1],
+            [0,1,1],
+            ],
+            [[1,0,1],
+             [1,1,1]
+            ],
+            [[2,0,1],
+            [2,1,1],
+            ]]
+weigths = [[1,1],
+           [1,1],
+           [1,1]]
+knotvector_u = [0,0,2,2] #x
+knotvector_w = [0,0,0,1,1,1] #y
+x = np.linspace(0,2-1e-3,5)
+y = np.linspace(0,1-1e-3,5)
+NControl_u = 2
+NControl_w = 3
 
-#Number of cells each direction
-uCells = 12
-wCells  =10
+Surfacepoints = []
+for xx in x:
+    srf = [Surface(NControl_u,NControl_w,xx,yy,weigths,knotvector_u,knotvector_w,p,q,ctrlpts) for yy in y]
+    Surfacepoints.append(srf)
+#print(Curvepoints)
+print(Surfacepoints)
+plot_surface(Surfacepoints,ctrlpts)
 
-#Dependant VARIABLES
-#Total numer of Control Points in U
-uPTS = np.size(x,0)
-wPTS = np.size(x,1)
-
-#total number of subdivision
-n = uPTS -1
-m = wPTS -1
-#parametric variable
-u = np.linspace(0,1,uCells)
-w = np.linspace(0,1,wCells)
-
-#Bernstein basis polinomial
-b = []
-d = []
-
-#Initailized  Empty Matrix for X,Y,z Bezier Curve
-xBezier = np.zeros((uCells,wCells))
-yBezier = np.zeros((uCells,wCells))
-zBezier = np.zeros((uCells,wCells))
-
-#binomial coefficient
-def Ni(n,i):
-    return np.math.factorial(n)/(np.math.factorial(i)*np.math.factorial(n-i))
-
-def Mj(m,j):
-    return np.math.factorial(m)/(np.math.factorial(j)*np.math.factorial(m-j))
-
-#Brnstein Basis polinomial
-def J(n,i,u):
-    return np.matrix(Ni(n,i)*(u**i)*(1-u)**(n-i))
-def K(m,j,w):
-    return np.matrix(Mj(m,j)*(w**j)*(1-w)**(m-j))
-
-#MAIN LOOP
-for i in range(0,uPTS):
-
-    for j in range(0,wPTS):
-        b.append(J(n,i,u))
-        d.append(K(m,j,w))
-
-        #Transpose J array
-        Jt = J(n,i,u).transpose()
-
-        #Bezier Curve calculatino
-        xBezier = Jt*K(m,j,w)*x[i,j] + xBezier
-        yBezier = Jt*K(m,j,w)*y[i,j] + yBezier
-        zBezier = Jt*K(m,j,w)*z[i,j] + zBezier
-    
-#Plotting
-# plt.figure()
-# plt.subplot(121)
-# for line in b:
-#     plt.plot(u,line.transpose())
-# for line in d:
-#     plt.plot(w,line.transpose())
-# plt.show()
-        
-#Bezier surface
-fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
-ax.plot_surface(xBezier,yBezier,zBezier)
-ax.scatter(x,y,z, edgecolors='face')
-plt.show()

@@ -11,15 +11,15 @@ xB = 2
 l = xB-xA # length of the domain
 
 #Number of points
-N = 6
-p = 3 #quadratic B-splines
+N = 2
+p = 5 #quadratic B-splines
 
 # defining the domain 
 knots = np.linspace(xA, xB, N)
 knots = np.insert(knots,0,[xA for i in range(p)])
 knots = np.append(knots,[xB for i in range(p)])
 
-x = np.linspace(xA,xB,5000)
+x = np.linspace(xA,xB,1000)
 
 from utility import plotBsplineBasis
 plotBsplineBasis(x,knots,p)
@@ -27,7 +27,7 @@ plotBsplineBasis(x,knots,p)
 K,F = FEM.element(x,knots,p)
 u = FEM.solve(F,K)
 analitical = [xv**5-xv**4+xv**3-3*xv*xv+2*xv+1 for xv in x]
-print("Mean Absolute Error:",np.mean(np.abs(FEM.evaluate(u,knots,p,x)[:-2]-analitical[:-2])))
+print("Mean Absolute Error:",np.mean(np.abs(FEM.evaluate(u,knots,p,x)[:-1]-analitical[:-1])))
 FEM.show(u,knots,p,x, analitical,plotbasis=True)
 
 

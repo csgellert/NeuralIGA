@@ -50,8 +50,8 @@ def Curve(k,u,weigths, knotvector,order,ctrlpts):
     return C
 
 def Surface(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q,ctrlpts):
-    n = get_numerator2d(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q,ctrlpts)
-    d = get_denominator2d(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
+    n = get_numeratorSurf(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q,ctrlpts)
+    d = get_denominatorSurf(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
     tmp = n/d
     S = get_numeratorSurf(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q,ctrlpts)/get_denominatorSurf(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
     if math.isnan(S[0]):

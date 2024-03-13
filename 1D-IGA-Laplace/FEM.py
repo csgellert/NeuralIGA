@@ -14,12 +14,9 @@ def element(xx, t, p):
                 K[i,j] += dBdXi(x,p,i,t)*dBdXi(x,p,j,t)*dx
 
             #ax.plot(xx2, [dBdXi(x,k,i,t) for x in xx])
-        fsdf = xx[-1]
-        d = dBdXi(xx[-2],p,i,t)
-
         for x in xx:
             F[i] += B(x,p,i,t)*(6-6*x+12*x**2-20*x**3)*dx
-        F[i]+= 50* B(xx[-1]-1e-8,p,i,t)
+        F[i]+= 50* B(xx[-1],p,i,t)
     print(K)
     print(F)
     return K,F

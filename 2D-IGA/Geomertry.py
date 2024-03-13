@@ -1,19 +1,21 @@
 import matplotlib.pyplot as plt
-def B(x, k, i, t): #uniform B-spline Basis Functions
+def B(x, k, i, t, finish_end=True): #uniform B-spline Basis Functions
    # x = xi
    # k = grade
    # i = i-th basis function
    # t = knotvector
+   #! finish end: at the right side if the intervall the function shall be 0 by definition,
+   #! but in our case it shall be 1 but in the recursive functon call it would cause problem
    if k == 0:
       return 1.0 if t[i] <= x < t[i+1] else 0.0
    if t[i+k] == t[i]:
       c1 = 0.0
    else:
-      c1 = (x - t[i])/(t[i+k] - t[i]) * B(x, k-1, i, t)
+      c1 = (x - t[i])/(t[i+k] - t[i]) * B(x, k-1, i, t, finish_end=False)
    if t[i+k+1] == t[i+1]:
-      c2 = 0.0
+      c2 = 1 if x == t[-1] and finish_end else 0 #! at the right side if the intervall the function shall be 0 by definition, but in our case it shall be 1
    else:
-      c2 = (t[i+k+1] - x)/(t[i+k+1] - t[i+1]) * B(x, k-1, i+1, t)
+      c2 = (t[i+k+1] - x)/(t[i+k+1] - t[i+1]) * B(x, k-1, i+1, t,finish_end=False)
    return c1 + c2
 def dBdXi(x, k, i, t):
    assert k>=1

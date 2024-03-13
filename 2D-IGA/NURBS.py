@@ -2,62 +2,36 @@ import numpy as np
 from Geomertry import B
 import matplotlib.pyplot as plt
 import math
-GY = math.sqrt(2)/2
-PP2 = math.pi/2
-
-
-
-def get_denominator(k,u,weigths, knotvector,order):
-    sum = 0
-    # amit a  Wikipédia u-nak jelöl az az x a mi esetünkben...
-    for i in range(1-1,k):
-        sum += weigths[i]*B(u,order,i,knotvector)
-    return sum
-def get_numerator(k,u,weigths, knotvector,order,ctrlpts):
-    sum = np.array([0,0,0],dtype='float64')
-    # amit a  Wikipédia u-nak jelöl az az x a mi esetünkben...
-    for i in range(1-1,k):
-        Btmp = B(u,order,i,knotvector)
-        ctemp = ctrlpts[i]
-        wtmp = weigths[i]
-        sum += weigths[i]*B(u,order,i,knotvector)*np.array(ctrlpts[i])
-    return list(sum)
-def get_denominatorSurf(k,l,u,w,weigths, knotvector_u,knotvector_w,p,q):
-    sum = 0
-    # amit a  Wikipédia u-nak jelöl az az x a mi esetünkben...
-    for i in range(1-1,k):
-        for j in range(1-1,l):
-            tmpB1 = B(u,p,i,knotvector_u)
-            tmpB2 = B(w,q,j,knotvector_w)
-            tmpw = weigths[j][i]
-            sum += weigths[j][i]*B(u,p,i,knotvector_u)*B(w,q,j,knotvector_w)
-    if sum == 0:
-        sum=1
-    return sum
-
-def get_numeratorSurf(k,l,u,w,weigths, knotvector_u,knotvector_w,p,q,ctrlpts):
-    sum = np.array([0,0,0],dtype='float64')
-    # amit a  Wikipédia u-nak jelöl az az x a mi esetünkben...
-    for i in range(1-1,k):
-        for j in range(1-1,l):
-            tmpw = weigths[j][i]
-            tmp_c = ctrlpts[j][i]
-            sum += weigths[j][i]*B(u,p,i,knotvector_u)*B(w,q,j,knotvector_w)*np.array(ctrlpts[j][i])
-    return list(sum)
-
-def Curve(k,u,weigths, knotvector,order,ctrlpts):
-    C = get_numerator(k,u,weigths, knotvector,order,ctrlpts)/get_denominator(k,u,weigths, knotvector,order)
-    return C
 
 def Surface(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q,ctrlpts):
-    n = get_numeratorSurf(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q,ctrlpts)
-    d = get_denominatorSurf(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
-    tmp = n/d
-    S = get_numeratorSurf(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q,ctrlpts)/get_denominatorSurf(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
-    if math.isnan(S[0]):
-        S = 0
-    return S
+    sum = np.array([0,0,0],dtype='float64')
+    for i in range(0,k):
+        for j in range(0,l):
+            sum += R2(k,l,i,j,u,w,weigths,knotvector_u,knotvector_w,p,q)*np.array(ctrlpts[j][i])
+    return list(sum)
+def Curve(k,u,weigths, knotvector,order,ctrlpts):
+    sum = 0
+    for i in range(k):
+        sum += R(k,u,i,weigths, knotvector,order)*np.array(ctrlpts[i])
+    return sum
+def W(k,u,weigths, knotvector,order):
+    W_sum = 0
+    for i in range(k):
+        W_sum += weigths[i]*B(u,order,i,knotvector)
+    return W_sum
+def W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q):
+    sum = 0
+    for i in range(1-1,k):
+        for j in range(1-1,l):
+            sum += weigths[j][i]*B(u,p,i,knotvector_u)*B(w,q,j,knotvector_w)
+    return sum
+def R(k,u,i,weigths, knotvector,order):
+    return weigths[i]*B(u,order,i,knotvector)/W(k,u,weigths, knotvector,order)
+def R2(k,l,i,j,u,w,weigths,knotvector_u,knotvector_w,p,q):
+    return weigths[j][i]*B(u,p,i,knotvector_u)*B(w,q,j,knotvector_w)/W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
 
+
+    
 
 def plotcurve(curvepoints,ctrlpoints,weigths):
     import matplotlib.pyplot as plt
@@ -109,12 +83,15 @@ def plot_surface(surface,ctrlpts):
             y.append(i[1])
             z.append(i[2])
     ax.scatter(x,y,z,c="r",marker="*")
+    plt.axis('equal')
     plt.show()
 
 
 
 surface = True
 if __name__== "__main__":
+    GY = math.sqrt(2)/2
+    PP2 = math.pi/2
     if not surface:
         #circle
         order = 2

@@ -1,5 +1,5 @@
 import numpy as np
-from Geomertry import B
+from Geomertry import B, dBdXi, plotBsplineBasis
 import matplotlib.pyplot as plt
 import math
 
@@ -14,6 +14,11 @@ def Curve(k,u,weigths, knotvector,order,ctrlpts):
     for i in range(k):
         sum += R(k,u,i,weigths, knotvector,order)*np.array(ctrlpts[i])
     return sum
+def CurveDerivative(k,u,weigths, knotvector,order,ctrlpts):
+    sum = 0
+    for i in range(k):
+        sum += dRdXi(k,u,i,weigths, knotvector,order)*np.array(ctrlpts[i])
+    return sum
 def W(k,u,weigths, knotvector,order):
     W_sum = 0
     for i in range(k):
@@ -25,11 +30,21 @@ def W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q):
         for j in range(1-1,l):
             sum += weigths[j][i]*B(u,p,i,knotvector_u)*B(w,q,j,knotvector_w)
     return sum
+def dWdXi(k,u,weigths, knotvector,order):
+    W_sum = 0
+    for i in range(k):
+        W_sum += weigths[i]*dBdXi(u,order,i,knotvector)
+    return W_sum
 def R(k,u,i,weigths, knotvector,order):
     return weigths[i]*B(u,order,i,knotvector)/W(k,u,weigths, knotvector,order)
 def R2(k,l,i,j,u,w,weigths,knotvector_u,knotvector_w,p,q):
     return weigths[j][i]*B(u,p,i,knotvector_u)*B(w,q,j,knotvector_w)/W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
-
+def dRdXi(k,u,i,weigths, knotvector,order):
+    if u == knotvector[-1]:
+        print(":::")
+    numerator = W(k,u,weigths, knotvector,order)*dBdXi(u,order,i,knotvector) - dWdXi(k,u,weigths, knotvector,order)*B(u,order,i,knotvector)
+    denominator = W(k,u,weigths, knotvector,order)*W(k,u,weigths, knotvector,order)
+    return weigths[i]*numerator/denominator
 
     
 
@@ -88,7 +103,7 @@ def plot_surface(surface,ctrlpts):
 
 
 
-surface = True
+surface = False
 if __name__== "__main__":
     GY = math.sqrt(2)/2
     PP2 = math.pi/2
@@ -106,11 +121,14 @@ if __name__== "__main__":
                     [1,0,1]]
         weigths = [1,GY,1,GY,1,GY,1,GY,1]
         knotvector = [0,0,0,PP2,PP2,2*PP2,2*PP2,3*PP2,3*PP2,4*PP2,4*PP2,4*PP2]
-        x = np.linspace(0,PP2*4,100)
+        x = np.linspace(0,PP2*4,1000)
         NControl = 9
         Curvepoints = [Curve(NControl,xx,weigths,knotvector,order,ctrlpts) for xx in x]
+        derivative = [CurveDerivative(NControl,xx,weigths,knotvector,order,ctrlpts) for xx in x]
         #print(Curvepoints)
-        plotcurve(Curvepoints,ctrlpts,weigths)
+        #plotcurve(Curvepoints,ctrlpts,weigths)
+        plotBsplineBasis(x,knotvector,order,derivative=True, sum=False)
+        plotcurve(derivative,ctrlpts,weigths)
     else:
         p = 2
         q = 1

@@ -5,13 +5,16 @@ def B(x, k, i, t, finish_end=True): #uniform B-spline Basis Functions
    # i = i-th basis function
    # t = knotvector
    if k == 0:
-      return 1.0 if t[i] <= x < t[i+1] else 0.0
+      if finish_end and x == t[-1] and i>=len(t)-k-1-1-k:
+         return 1.0 if t[i] <= x <= t[i+1] else 0.0#! if we are at the end of the intervall we have to fix 0-order elements to not to be zero
+      else:
+         return 1.0 if t[i] <= x < t[i+1] else 0.0 
    if t[i+k] == t[i]:
       c1 = 0.0
    else:
       c1 = (x - t[i])/(t[i+k] - t[i]) * B(x, k-1, i, t, finish_end=False)
    if t[i+k+1] == t[i+1]:
-      c2 = 1 if x == t[-1] and finish_end else 0
+      c2 = 1 if x == t[-1] and finish_end and not t[i+k] == t[i] and i>=len(t)-k-1-1-k else 0 #! at the right side if the intervall the function shall be 0 by definition,but in our case it shall be 1 but in the recursive functon call it would cause problem
    else:
       c2 = (t[i+k+1] - x)/(t[i+k+1] - t[i+1]) * B(x, k-1, i+1, t,finish_end=False)
    return c1 + c2
@@ -91,14 +94,14 @@ def get_gauss_points_regular_FEM(nGp=2):
 """
 
 if __name__ == "__main__":
-   k = 3
+   k = 2
    
    import numpy as np
    fig, ax = plt.subplots()
    xx = np.linspace(1.5, 4.5, 500)
    xx2 = np.linspace(1, 4, 500)
-   t = [ 1,1,1,1, 2, 3, 4,4,4,4]
-   t2 = [4,0, 1, 2, 3, 4, 5, 6,6]
+   t = [1,1,1, 2, 3, 4,4,4]
+   #t2 = [4,0, 1, 2, 3, 4, 5, 6,6]
    c = [1,1,1,1,1,1,1,1,1,1,1,1]
    #ax.plot(xx, [bspline(x, t, c ,k) for x in xx], 'r-', lw=3, label='naive')
    ax.plot(xx2, [bspline(x, t, c ,k) for x in xx2], 'g-', lw=3, label='naive')
@@ -113,7 +116,7 @@ if __name__ == "__main__":
       #diff = [(Ni2[idx]-Ni2[idx-1])/(xx2[1]-xx2[0]) for idx,x in enumerate(Ni2)]
       #ax.plot(xx, Ni)2
       ax.plot(xx2, Ni2)
-      ax.plot(xx2, [dBdXi(x,k,i,t) for x in xx2])
+      ax.plot(xx2, [dBdXi(x,k,i,t) for x in xx2],"g--")
       ax.plot(t,[0 for _ in t],"r*")
       #ax.plot(xx2[1:], diff[1:])
    plt.show()

@@ -11,8 +11,8 @@ xB = 2
 l = xB-xA # length of the domain
 
 #Number of points
-N = 2
-p = 5 #quadratic B-splines
+N = 4
+p = 4 #quadratic B-splines
 
 # defining the domain 
 knots = np.linspace(xA, xB, N)

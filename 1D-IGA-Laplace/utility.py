@@ -4,8 +4,10 @@ def B(x, k, i, t, finish_end=True): #uniform B-spline Basis Functions
    # k = grade
    # i = i-th basis function
    # t = knotvector
+   correction_required = x == t[-1] and finish_end and not t[i+k] == t[i] and t[i+k] == t[-1]
    if k == 0:
-      if finish_end and x == t[-1] and i>=len(t)-k-1-1-k:
+      if correction_required: 
+         #TODO The conditions shall be given proprerly: 
          return 1.0 if t[i] <= x <= t[i+1] else 0.0#! if we are at the end of the intervall we have to fix 0-order elements to not to be zero
       else:
          return 1.0 if t[i] <= x < t[i+1] else 0.0 
@@ -14,7 +16,8 @@ def B(x, k, i, t, finish_end=True): #uniform B-spline Basis Functions
    else:
       c1 = (x - t[i])/(t[i+k] - t[i]) * B(x, k-1, i, t, finish_end=False)
    if t[i+k+1] == t[i+1]:
-      c2 = 1 if x == t[-1] and finish_end and not t[i+k] == t[i] and i>=len(t)-k-1-1-k else 0 #! at the right side if the intervall the function shall be 0 by definition,but in our case it shall be 1 but in the recursive functon call it would cause problem
+      #TODO: and i<=len(t)-k-1 ????
+      c2 = 1 if correction_required else 0 #! at the right side if the intervall the function shall be 0 by definition,but in our case it shall be 1 but in the recursive functon call it would cause problem
    else:
       c2 = (t[i+k+1] - x)/(t[i+k+1] - t[i+1]) * B(x, k-1, i+1, t,finish_end=False)
    return c1 + c2

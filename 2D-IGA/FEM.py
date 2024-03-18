@@ -18,10 +18,21 @@ def GaussLagrandeQuadrature(i,knotvector, order, gaussPoints=1):
     else:
         raise NotImplementedError
     #numerical integration
+    knotvector_x = np.array(knotvector[i:i+order+1+1])
+    a= knotvector_x[0]
+    b = knotvector_x[-1]
+    avg = (a+b)/2
+    length_h = (b-a)/2
+    shifted = knotvector_x-avg
+    knotvector_xi = shifted/length_h
     sum = 0
     for idx,gaussPoint in enumerate(g):
-        sum += w[idx]*B(gaussPoint, order,i,knotvector)
+        sum += w[idx]*B(gaussPoint, order,0,knotvector_xi)
+    #Jacobian = (knotvector[i+order+1]-knotvector[i])
+    Jacobian = length_h
     #TODO Jacobi determinant!!!
+    print(f"J: = {Jacobian}")
+    sum*=Jacobian
     return sum
 def RectangleIntegration(knotvector, i, order, division):
     x = np.linspace(knotvector[0],knotvector[-1], division)
@@ -39,8 +50,8 @@ if __name__ == "__main__":
 
     import numpy as np
     fig, ax = plt.subplots()
-    xx2 = np.linspace(-1, 1, 500)
-    t = [-1,-1,-1,0, 1,1,1]
+    xx2 = np.linspace(-3, 3, 500)
+    t = [-3,-3,-3,-1,0.5,1, 3,3,3]
     c = [1,1,1,1,1,1,1,1,1,1,1,1]
     ax.plot(xx2, [bspline(x, t, c ,k) for x in xx2], 'g-', lw=3, label='naive')
     ax.grid(True)
@@ -57,7 +68,8 @@ if __name__ == "__main__":
         ax.plot(t,[0 for _ in t],"r*")
         #ax.plot(xx2[1:], diff[1:])
     #* TEST Integration
-    iLa = GaussLagrandeQuadrature(1,t,k,1)
-    iRe = RectangleIntegration(t,1,k,10000)
+    i = 3
+    iLa = GaussLagrandeQuadrature(i,t,k,1)
+    iRe = RectangleIntegration(t,i,k,10000)
     print(f"Gauss: {iLa}\tRectangle: {iRe}")
     plt.show()

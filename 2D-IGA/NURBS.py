@@ -45,6 +45,28 @@ def dRdXi(k,u,i,weigths, knotvector,order):
     numerator = W(k,u,weigths, knotvector,order)*dBdXi(u,order,i,knotvector) - dWdXi(k,u,weigths, knotvector,order)*B(u,order,i,knotvector)
     denominator = W(k,u,weigths, knotvector,order)*W(k,u,weigths, knotvector,order)
     return weigths[i]*numerator/denominator
+def dW2dXi(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q):
+    #xi == u 
+    sum = 0
+    for i in range(1-1,k):
+        for j in range(1-1,l):
+            sum += weigths[j][i]*dBdXi(u,p,i,knotvector_u)*B(w,q,j,knotvector_w)
+    return sum
+def dW2dEta(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q):
+    #eta = w
+    sum = 0
+    for i in range(1-1,k):
+        for j in range(1-1,l):
+            sum += weigths[j][i]*dBdXi(u,p,i,knotvector_u)*dBdXi(w,q,j,knotvector_w)
+    return sum
+def dR2dXi(k,l,i,j,u,w,weigths,knotvector_u,knotvector_w,p,q):
+    numerator = W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)*dBdXi(u,p,i,knotvector_u) - dW2dXi(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)*B(u,p,i,knotvector_u)
+    denominator = W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)*W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
+    return weigths[j][i]*B(w,q,j,knotvector_w)*numerator/denominator
+def dR2dEta(k,l,i,j,u,w,weigths,knotvector_u,knotvector_w,p,q):
+    numerator = W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)*dBdXi(w,q,j,knotvector_w) - dW2dEta(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)*B(w,q,j,knotvector_w)
+    denominator = W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)*W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
+    return weigths[j][i]*B(u,p,i,knotvector_u)*numerator/denominator
 
     
 

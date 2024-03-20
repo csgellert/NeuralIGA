@@ -2,13 +2,102 @@ from NURBS import *
 from Geomertry import *
 import numpy as np
 
-def element(rr, ph, p, q, knotvector_u, knotvector_v,ctrlpts,weigths):
-    pass
+def shapeFunctionRoutine(k, u, p, q, knotvector_u, knotvector_v,ctrlpts,weigths, nen,e, INN, IEN, xi_tilde,eta_tilde):
+    """
+    p: order in x direction
+    q: order in y deirection
+    nen: number of the local shape function
+    e: element number
+    INC: TODO
+    ICN: TODO
+    xi_tilde: TODO
+    eta_tilde: TODO
+    """
+    #* --------------- Initialisation-----------------
+    R = np.zeros(nen) #Array of the trivariate NURBS basis functions
+    dR_dx = np.zeros((nen,2)) # Bivariate NURBS functon derivatives w.r.t. physical coordinates
+    J = 0
+
+    #*Local variable initialization
+    ni,nj=0 # NURBS coordiates
+    xi, eta = 0 #Parametric coordinates
+    N = np.zeros(p+1) # Arrays of uninvariant B-spline basis functions
+    M = np.zeros(q+1) # Arrays of uninvariant B-spline basis functions    
+
+    dN_dxi = np.zeros(p+1) #Uninvariant B-spline function derivatives w.r.t appropriete parametric coordinates
+    dM_deta = np.zeros(q+1) #Uninvariant B-spline function derivatives w.r.t appropriete parametric coordinates
+    dR_dxi = np.zeros((nen,2)) #Bivariante NURBS function derivatives w.r.t parametric coordinates
+
+    dx_dxi = np.zeros((2,2)) # Derivative od parametric coordinates w.r.t parametric coordinates
+    
+    dxi_dx = np.zeros((2,2)) # Inverse of dx dxi
+    dxi_dtildexi = np.zeros((2,2)) #Derivatives of parametric coordinates w.r.t. parent element coordinates
+
+    J_mat = np.zeros((2,2)) #Jacobian matrix
+    #?counters
+    sum_xi,sum_eta = 0 #Dummy sums for calculating rational derivatives
+
+    # NURBS coordinates
+    ni = INN[[IEN[e][0]]][0]
+    nj = INN[[IEN[e][0]]][1]
+
+    xi = ((knotvector_u[ni+1]-knotvector_u[ni])*xi_tilde + (knotvector_u[ni+1]+knotvector_u[ni]))/2
+    eta = ((knotvector_w[nj+1]-knotvector_w[nj])*eta_tilde + (knotvector_w[nj+1]+knotvector_w[nj]))/2
+
+    #*--------------------Part 2 -----------------------------------------------------------
+    #?BsplineBasis and Derivatives:
+    #TODO
+def gaussIntegrateElement(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths):
+    """
+    p - order in x direction
+    q - order in y direction
+    knotvector_x - knotvector in x direction
+    knotvector_y - knotvector in y direction
+    ed - TODO
+    i: ith element in x direction
+    j: jth element in y direction
+    """
+    #* Defining Gauss points
+    g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
+    w = np.array([1,1])
+    x1 = knotvector_x[i]
+    x2 = knotvector_x[i+1]
+    y1 = knotvector_y[j]
+    y2 = knotvector_y[j+1]
+    sum = 0
+
+    for xbasis in range(0,p+1):#iterate throug basis functions in x direction
+        for ybasis in range(0,q+1): #iterate throug basis functions in y direction
+            for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
+                for idxy,gpy in enumerate(g): #iterate throug Gauss points functions in y direction
+                    xi = (x2-x1)/2 * gpx + (x2+x1)/2
+                    eta = (y2-y1)/2 * gpy + (y2+y1)/2
+                    Jxi = (x2-x1)/2
+                    Jeta = (y2-y1)/2
+                    f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                    sum += Jxi*Jeta*w[idxx]*w[idxy]*f
+    return sum
+
+def integrateElement(k,l,weigths,knotvector_u,knotvector_w,p,q):
+    x = np.linspace(0,2,100)
+    y = np.linspace(0,3,100)
+    dx = x[-1]-x[-2]
+    dy = y[-1]-y[-2]
+    sum = 0
+    for xx in x:
+        for yy in y:
+            for i in range(0,k):
+                for j in range(0,l):
+                    sum+=R2(k,l,i,j,xx,yy,weigths,knotvector_u,knotvector_w,p,q)*dx*dy
+    return sum
+
+    
+    
 def assembly(K,F,Ke,Fe):
     pass
 def solve(K,F):
     pass
-def GaussLagrandeQuadrature(i,knotvector, order, gaussPoints=1):
+def gaussLagandereQuadratureBasisfunction(i,knotvector, order, gaussPoints=1, func=B):
     if gaussPoints == 1:
         g = [-1/math.sqrt(3), 1/math.sqrt(3)]
         w = [1,1]
@@ -17,41 +106,35 @@ def GaussLagrandeQuadrature(i,knotvector, order, gaussPoints=1):
         w = [5/9, 8/9, 5/9]
     else:
         raise NotImplementedError
-    #numerical integration
-    knotvector_x = np.array(knotvector[i:i+order+1+1])
-    a= knotvector_x[0]
-    b = knotvector_x[-1]
-    avg = (a+b)/2
-    length_h = (b-a)/2
-    shifted = knotvector_x-avg
-    knotvector_xi = shifted/length_h
     sum = 0
-    for idx,gaussPoint in enumerate(g):
-        sum += w[idx]*B(gaussPoint, order,0,knotvector_xi)
-    #Jacobian = (knotvector[i+order+1]-knotvector[i])
-    Jacobian = length_h
-    #TODO Jacobi determinant!!!
-    print(f"J: = {Jacobian}")
-    sum*=Jacobian
+    for element in range(i,i+order+2):
+        a = knotvector[element]
+        b = knotvector[element+1]
+        difp2 = (b-a)/2
+        avg = (a+b)/2
+        pass
+        for idx,gaussPoint in enumerate(g):
+            xi = difp2*gaussPoint+avg
+            sum += difp2* w[idx]*func(xi, order,i,knotvector)
     return sum
-def RectangleIntegration(knotvector, i, order, division):
+def RectangleIntegration(knotvector, i, order, division,func=B):
     x = np.linspace(knotvector[0],knotvector[-1], division)
     dx = x[-1]-x[-2]
     sum = 0
     for xx in x:
-        sum += B(xx,order,i,knotvector)*dx
+        sum += func(xx,order,i,knotvector)*dx
     return sum
 
 
 
 #* TEST
 if __name__ == "__main__":
-    k = 2
+    k = 3
 
     import numpy as np
     fig, ax = plt.subplots()
     xx2 = np.linspace(-3, 3, 500)
-    t = [-3,-3,-3,-1,0.5,1, 3,3,3]
+    t = [-3,-3,-3,-3,0,1,1, 3,3,3,3]
     c = [1,1,1,1,1,1,1,1,1,1,1,1]
     ax.plot(xx2, [bspline(x, t, c ,k) for x in xx2], 'g-', lw=3, label='naive')
     ax.grid(True)
@@ -69,7 +152,8 @@ if __name__ == "__main__":
         #ax.plot(xx2[1:], diff[1:])
     #* TEST Integration
     i = 3
-    iLa = GaussLagrandeQuadrature(i,t,k,1)
-    iRe = RectangleIntegration(t,i,k,10000)
-    print(f"Gauss: {iLa}\tRectangle: {iRe}")
+    iRe = RectangleIntegration(t,i,k,50000)
+    iGaLA = gaussLagandereQuadratureBasisfunction(i,t,k,2)
+    print(f"Rectangle: {iRe}\tGauss: {iGaLA}")
+     #element(2,2,t,t,None,1,1)
     plt.show()

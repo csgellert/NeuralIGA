@@ -77,6 +77,55 @@ def gaussIntegrateElement(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nCon
                     f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                     sum += Jxi*Jeta*w[idxx]*w[idxy]*f
     return sum
+def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths):
+    """
+    p - order in x direction
+    q - order in y direction
+    knotvector_x - knotvector in x direction
+    knotvector_y - knotvector in y direction
+    ed - TODO
+    i: ith element in x direction
+    j: jth element in y direction
+    """
+    assert q==1 and p == 1 
+    #* Defining Gauss points
+    g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
+    w = np.array([1,1])
+    x1 = knotvector_x[i]
+    x2 = knotvector_x[i+1]
+    y1 = knotvector_y[j]
+    y2 = knotvector_y[j+1]
+    sum = 0
+    K = np.zeros((4,4))
+    F = np.zeros(4)
+    for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
+        for idxy,gpy in enumerate(g): #iterate throug Gauss points functions in y direction
+            xi = (x2-x1)/2 * gpx + (x2+x1)/2
+            eta = (y2-y1)/2 * gpy + (y2+y1)/2
+            Jxi = (x2-x1)/2
+            Jeta = (y2-y1)/2
+            Jacobi = Jxi*Jeta
+            #*CAlculating the Ke
+            for xbasisi in range(0,2):
+                for ybasisi in range(0,2): 
+                    for xbasisj in range(0,2):
+                        for ybasisj in range(0,2): 
+                            #f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            dNidxi = dR2dXi(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            dNidEta = dR2dEta(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            dNjdxi = dR2dXi(nControlx,nControly,xbasisj,ybasisj,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            dNjdeta = dR2dEta(nControlx,nControly,xbasisj,ybasisj,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            #raise NotImplementedError #! Ezt itt még nagyon át kéne nézni, de lehet nem este 10 0 legalkalmasabb erre...
+                            K[2*xbasisi + ybasisi][2*xbasisj+ybasisj] = w[idxx]*w[idxy]*((dNidxi/Jxi)*(dNjdxi/Jxi) + (dNidEta/Jeta)*(dNjdeta/Jeta) *Jacobi)
+            #* Calculating the Fe vector
+            for xbasisi in range(0,2):
+                for ybasisi in range(0,2): 
+                    fi = 2-(xi**2 + eta**2)
+                    Ni = R2(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                    F[2*xbasisi+ybasisi] = w[idxx]*w[idxy]*(fi*Ni*Jacobi)
+
+
+    return K,F
 
 def integrateElement(k,l,weigths,knotvector_u,knotvector_w,p,q):
     x = np.linspace(0,2,100)
@@ -96,7 +145,37 @@ def integrateElement(k,l,weigths,knotvector_u,knotvector_w,p,q):
 def assembly(K,F,Ke,Fe):
     pass
 def solve(K,F):
-    pass
+    u = np.dot(np.linalg.inv(K),F)
+    print("U:\n",u)
+    return u
+def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_w,p,q):
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
+    xPoints = []
+    yPoints = []
+    zPoints = []
+    for surfpoint in surface:
+        for koordinate in surfpoint:
+            xPoints.append(koordinate[0])  
+            yPoints.append(koordinate[1])  
+            res  = 0
+            for i in range(0,2):
+                for j in range(0,2):
+                    res += result[2*i+j]*R2(k,l,i,j,koordinate[0],koordinate[1],weigths,knotvector_u,knotvector_w,p,q)
+            zPoints.append(res) 
+    ax.scatter(xPoints,yPoints,zPoints)#, edgecolors='face')
+    #plot controlpoints:
+    x=[]
+    y=[]
+    z=[]
+    for j in ctrlpts:
+        for i in j:
+            x.append(i[0])
+            y.append(i[1])
+            z.append(i[2])
+    ax.scatter(x,y,z,c="r",marker="*")
+    #plt.axis('equal')
+    plt.show()
 def gaussLagandereQuadratureBasisfunction(i,knotvector, order, gaussPoints=1, func=B):
     if gaussPoints == 1:
         g = [-1/math.sqrt(3), 1/math.sqrt(3)]

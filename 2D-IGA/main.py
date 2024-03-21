@@ -40,6 +40,12 @@ for xx in x:
 #print(Surfacepoints)
 iGa = FEM.gaussIntegrateElement(p,q,knotvector_u,knotvector_w,None,1,1,NControl_u,NControl_w,weigths)
 iRe = FEM.integrateElement(NControl_u,NControl_w,weigths,knotvector_u,knotvector_w,p,q)
+K,F = FEM.element(p,q,knotvector_u,knotvector_w,None,1,1,NControl_u,NControl_w,weigths)
+print(K)
+print(np.linalg.inv(K))
+print(F)
+result = FEM.solve(K,F)
+FEM.visualizeResults(Surfacepoints,ctrlpts_simple,result,NControl_u,NControl_w,weigths,knotvector_u,knotvector_w,p,q)
 print(f"Gauss: {iGa}\tRectangle: {iRe}")
 NURBS.plot_surface(Surfacepoints,ctrlpts_simple)
 

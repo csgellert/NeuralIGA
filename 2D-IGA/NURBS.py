@@ -67,6 +67,25 @@ def dR2dEta(k,l,i,j,u,w,weigths,knotvector_u,knotvector_w,p,q):
     numerator = W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)*dBdXi(w,q,j,knotvector_w) - dW2dEta(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)*B(w,q,j,knotvector_w)
     denominator = W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)*W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
     return weigths[j][i]*B(u,p,i,knotvector_u)*numerator/denominator
+def plotNURBSbasisFunction(k,l,i,j,weigths,knotvector_u,knotvector_w,p,q,fun):
+    x = np.linspace(0,1,100)
+    y = np.linspace(0,1,100)
+    fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
+    xPoints = []
+    yPoints = []
+    zPoints = []
+    for xx in x:
+        for yy in y:
+            xPoints.append(xx)  
+            yPoints.append(yy)  
+            f = fun(k,l,i,j,xx,yy,weigths,knotvector_u,knotvector_w,p,q)
+            zPoints.append(f)
+    ax.scatter(xPoints,yPoints,zPoints)
+    plt.xlabel("x")
+    plt.show()
+    
+    #plot it
+
 
     
 
@@ -125,7 +144,7 @@ def plot_surface(surface,ctrlpts):
 
 
 
-surface = False
+surface = True
 if __name__== "__main__":
     GY = math.sqrt(2)/2
     PP2 = math.pi/2

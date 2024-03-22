@@ -1,7 +1,7 @@
 from NURBS import *
 from Geomertry import *
 import numpy as np
-
+import matplotlib.pyplot as plt
 def shapeFunctionRoutine(k, u, p, q, knotvector_u, knotvector_v,ctrlpts,weigths, nen,e, INN, IEN, xi_tilde,eta_tilde):
     """
     p: order in x direction
@@ -105,6 +105,8 @@ def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths)
             Jxi = (x2-x1)/2
             Jeta = (y2-y1)/2
             Jacobi = Jxi*Jeta
+            Jxi=1
+            Jeta=1
             #*CAlculating the Ke
             for xbasisi in range(0,2):
                 for ybasisi in range(0,2): 
@@ -116,15 +118,19 @@ def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths)
                             dNjdxi = dR2dXi(nControlx,nControly,xbasisj,ybasisj,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                             dNjdeta = dR2dEta(nControlx,nControly,xbasisj,ybasisj,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                             #raise NotImplementedError #! Ezt itt még nagyon át kéne nézni, de lehet nem este 10 0 legalkalmasabb erre...
-                            K[2*xbasisi + ybasisi][2*xbasisj+ybasisj] = w[idxx]*w[idxy]*((dNidxi/Jxi)*(dNjdxi/Jxi) + (dNidEta/Jeta)*(dNjdeta/Jeta) *Jacobi)
+                            K[2*xbasisi + ybasisi][2*xbasisj+ybasisj] += w[idxx]*w[idxy]*(((dNidxi/Jxi)*(dNjdxi/Jxi) + (dNidEta/Jeta)*(dNjdeta/Jeta) )*Jacobi)
             #* Calculating the Fe vector
             for xbasisi in range(0,2):
                 for ybasisi in range(0,2): 
                     fi = 2-(xi**2 + eta**2)
                     Ni = R2(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                    F[2*xbasisi+ybasisi] = w[idxx]*w[idxy]*(fi*Ni*Jacobi)
-
-
+                    F[2*xbasisi+ybasisi] += w[idxx]*w[idxy]*(fi*Ni*Jacobi)
+    if x2 == 1:
+        K[1:2][:] = 0
+        K[:][1:2] = 0
+    if y2 == 1:
+        K[2:3][:] = 0
+        K[:][2:3] = 0
     return K,F
 
 def integrateElement(k,l,weigths,knotvector_u,knotvector_w,p,q):
@@ -149,11 +155,14 @@ def solve(K,F):
     print("U:\n",u)
     return u
 def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_w,p,q):
-    import matplotlib.pyplot as plt
+    
     fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
     xPoints = []
     yPoints = []
     zPoints = []
+    zRes = []
+    #result.append([0,0,0,0])
+    #plotBsplineBasis(np.linspace(0,1,100), knotvector_u,p)
     for surfpoint in surface:
         for koordinate in surfpoint:
             xPoints.append(koordinate[0])  
@@ -161,9 +170,11 @@ def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvecto
             res  = 0
             for i in range(0,2):
                 for j in range(0,2):
-                    res += result[2*i+j]*R2(k,l,i,j,koordinate[0],koordinate[1],weigths,knotvector_u,knotvector_w,p,q)
+                    res += result[2*j+i]*R2(k,l,i,j,koordinate[0],koordinate[1],weigths,knotvector_u,knotvector_w,p,q)
             zPoints.append(res) 
+            zRes.append( 0.5*(koordinate[0]**2-1)*(koordinate[1]**2-1))
     ax.scatter(xPoints,yPoints,zPoints)#, edgecolors='face')
+    ax.scatter(xPoints,yPoints,zRes)
     #plot controlpoints:
     x=[]
     y=[]
@@ -173,7 +184,7 @@ def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvecto
             x.append(i[0])
             y.append(i[1])
             z.append(i[2])
-    ax.scatter(x,y,z,c="r",marker="*")
+    #ax.scatter(x,y,z,c="r",marker="*")
     #plt.axis('equal')
     plt.show()
 def gaussLagandereQuadratureBasisfunction(i,knotvector, order, gaussPoints=1, func=B):

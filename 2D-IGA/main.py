@@ -56,7 +56,6 @@ for xx in x:
 iGa = FEM.gaussIntegrateElement(p,q,knotvector_u,knotvector_w,None,1,1,NControl_u,NControl_w,weigths)
 iRe = FEM.integrateElement(NControl_u,NControl_w,weigths,knotvector_u,knotvector_w,p,q)
 
-elements = ["a"]
 K = np.zeros((4,4))
 F = np.zeros(4)
 for i in range(1,3):

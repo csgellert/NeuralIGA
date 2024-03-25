@@ -154,7 +154,7 @@ def solve(K,F):
     u = np.dot(np.linalg.inv(K),F)
     print("U:\n",u)
     return u
-def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_w,p,q):
+def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_w,p,q,calc_error = True):
     
     fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
     xPoints = []
@@ -175,6 +175,9 @@ def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvecto
             zRes.append( 0.5*(koordinate[0]**2-1)*(koordinate[1]**2-1))
     ax.scatter(xPoints,yPoints,zPoints)#, edgecolors='face')
     ax.scatter(xPoints,yPoints,zRes)
+    if calc_error:
+        MSE = (np.square(np.array(zRes)-np.array(zPoints))).mean()
+        print(f"MSE: {MSE}")
     #plot controlpoints:
     x=[]
     y=[]

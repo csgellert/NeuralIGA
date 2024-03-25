@@ -1,6 +1,7 @@
 import numpy as np
 from NURBS import Surface, plot_surface
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
+    assert x0 < x1 and y0 < y1
     knotvector_u = np.linspace(x0,x1,xDivision+2)
     knotvector_w = np.linspace(y0,y1,yDivision+2)
     weights = np.ones((yDivision+2,xDivision+2))
@@ -17,7 +18,16 @@ def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     knotvector_w = np.insert(knotvector_w,0,[y0 for _ in range(q)])
     knotvector_w = np.append(knotvector_w,[y1 for _ in range(q)])
     return knotvector_u, knotvector_w, weights, ctrlpts
-
+def getDefaultValues():
+    x0 = 0
+    x1 = 1
+    y0 = 0
+    y1 = 1
+    p = 1
+    q = 1
+    xDivision = 1
+    yDivision = 1
+    return x0, y0,x1,y1,xDivision,yDivision,p,q
 if __name__ == "__main__":
     x0 = 0
     x1 = 2

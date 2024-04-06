@@ -171,17 +171,25 @@ def assembly(K,F,Ke,Fe,elemx,elemy,p,q, xDivision, yDivision):
 
     #K[idx:idx+len(Fe),idx:idx+len(Fe)] = Ke
     return K,F
-def solve(K,F):
-    dirichlet = [3,7,11,12,13,14,15]
-    k = 16
-    mask = np.ones((16, 16), dtype=bool)
+def solve(K,F,dirichlet):
+    k = len(F)
+    """
+    if k == 16:
+        dirichlet = [3,7,11,12,13,14,15]
+    elif k == 25:
+        dirichlet = [4,9,14,19,20,21,22,23,24]
+    elif k == 9:
+        dirichlet = [2,5,6,7,8]
+    else:
+        raise NotImplementedError"""
+    mask = np.ones((k, k), dtype=bool)
     for i in dirichlet:
         mask[i,:] = False
         mask[:,i] = False
     #mask[np.ix_(dirichlet, dirichlet)] = False
     tmp = K[mask]
     filtered_K = K[mask].reshape(k - len(dirichlet), k - len(dirichlet))
-    mask = np.ones(16, dtype=bool)
+    mask = np.ones(k, dtype=bool)
     mask[np.ix_(dirichlet)] = False
     filtered_F = F[mask].reshape(k - len(dirichlet))
     
@@ -205,9 +213,9 @@ def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvecto
             xPoints.append(koordinate[0])  
             yPoints.append(koordinate[1])  
             res  = 0
-            for i in range(0,4):
-                for j in range(0,4):
-                    res += result[4*i+j]*R2(k,l,i,j,koordinate[0],koordinate[1],weigths,knotvector_u,knotvector_w,p,q)
+            for i in range(0,k):
+                for j in range(0,l):
+                    res += result[k*i+j]*R2(k,l,i,j,koordinate[0],koordinate[1],weigths,knotvector_u,knotvector_w,p,q)
             zPoints.append(res) 
             zRes.append( 0.5*(koordinate[0]**2-1)*(koordinate[1]**2-1))
     ax.scatter(xPoints,yPoints,zPoints)#, edgecolors='face')

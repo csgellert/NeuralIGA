@@ -1,7 +1,8 @@
 import NURBS
 import numpy as np
 import FEM
-from mesh import generateRectangularMesh, getDefaultValues
+from mesh import generateRectangularMesh, getDefaultValues, getDirichletPoints
+from math import sqrt
 #defining geometry:
 default = getDefaultValues()
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
@@ -18,7 +19,7 @@ for xx in x:
     Surfacepoints.append(srf)
 #print(Curvepoints)
 #print(Surfacepoints)
-ke_dim = (p+1)*(q+1)# dimension of the elemntmatrix
+#ke_dim = (p+1)*(q+1)# dimension of the elemntmatrix
 K = np.zeros(((xDivision+1+1)*(yDivision+1+1),(xDivision+1+1)*(yDivision+1+1)))
 F = np.zeros((xDivision+1+1)*(yDivision+1+1))
 for elemx in range(p,p+xDivision+1):
@@ -29,9 +30,11 @@ for elemx in range(p,p+xDivision+1):
         #K[elemx-1:ke_dim+elemx-1,elemy-1:ke_dim+elemy-1] += Ke
         #F[elemx-1:elemx+ke_dim-1] += Fe
         pass
-print(K)
-print(F)
-result = FEM.solve(K,F)
+#print(K)
+#print(F)
+dirichlet = getDirichletPoints(int(sqrt(len(F))))
+print(dirichlet)
+result = FEM.solve(K,F,dirichlet)
 #NURBS.plotNURBSbasisFunction(NControl_u,NControl_w,2,1,weigths,knotvector_u,knotvector_w,p,q,NURBS.R2)
 FEM.visualizeResults(Surfacepoints,ctrlpts,result,NControl_u,NControl_w,weigths,knotvector_u,knotvector_w,p,q)
 

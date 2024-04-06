@@ -28,6 +28,12 @@ def getDefaultValues():
     xDivision = 2
     yDivision = 2
     return x0, y0,x1,y1,xDivision,yDivision,p,q
+def getDirichletPoints(k):
+    dirichlet = [i*k+k-1 for i in range(k-1)]
+    for i in range(k):
+        dirichlet.append(i+k*(k-1))
+    return dirichlet
+    
 if __name__ == "__main__":
     x0 = 0
     x1 = 2

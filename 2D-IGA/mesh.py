@@ -18,15 +18,15 @@ def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     knotvector_w = np.insert(knotvector_w,0,[y0 for _ in range(q)])
     knotvector_w = np.append(knotvector_w,[y1 for _ in range(q)])
     return knotvector_u, knotvector_w, weights, ctrlpts
-def getDefaultValues():
+def getDefaultValues(xdiv=2,ydiv=2):
     x0 = 0
     x1 = 1
     y0 = 0
     y1 = 1
     p = 1
     q = 1
-    xDivision = 2
-    yDivision = 2
+    xDivision = xdiv
+    yDivision = ydiv
     return x0, y0,x1,y1,xDivision,yDivision,p,q
 def getDirichletPoints(k):
     dirichlet = [i*k+k-1 for i in range(k-1)]

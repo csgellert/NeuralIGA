@@ -68,8 +68,8 @@ def dR2dEta(k,l,i,j,u,w,weigths,knotvector_u,knotvector_w,p,q):
     denominator = W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)*W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
     return weigths[j][i]*B(u,p,i,knotvector_u)*numerator/denominator
 def plotNURBSbasisFunction(k,l,i,j,weigths,knotvector_u,knotvector_w,p,q,fun):
-    x = np.linspace(0,1,100)
-    y = np.linspace(0,1,100)
+    x = np.linspace(0,1,20)
+    y = np.linspace(0,1,20)
     fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
     xPoints = []
     yPoints = []

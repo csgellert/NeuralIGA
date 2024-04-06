@@ -96,6 +96,8 @@ def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths)
     y1 = knotvector_y[j]
     y2 = knotvector_y[j+1]
     sum = 0
+    K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
+    F = np.zeros((p+1)*(q+1))
     K = np.zeros((4,4))
     F = np.zeros(4)
     for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
@@ -107,30 +109,36 @@ def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths)
             Jacobi = Jxi*Jeta
             Jxi=1
             Jeta=1
+            Jacobi = 1
             #*CAlculating the Ke
-            for xbasisi in range(0,2):
-                for ybasisi in range(0,2): 
-                    for xbasisj in range(0,2):
-                        for ybasisj in range(0,2): 
+            for xbasisi in range(i-1,i+1):
+                for ybasisi in range(j-1,j+1): 
+                    for xbasisj in range(i-1,i+1):
+                        for ybasisj in range(j-1,j+1): 
                             #f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                             dNidxi = dR2dXi(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                             dNidEta = dR2dEta(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                             dNjdxi = dR2dXi(nControlx,nControly,xbasisj,ybasisj,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                             dNjdeta = dR2dEta(nControlx,nControly,xbasisj,ybasisj,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                            #raise NotImplementedError #! Ezt itt még nagyon át kéne nézni, de lehet nem este 10 0 legalkalmasabb erre...
-                            K[2*xbasisi + ybasisi][2*xbasisj+ybasisj] += w[idxx]*w[idxy]*(((dNidxi/Jxi)*(dNjdxi/Jxi) + (dNidEta/Jeta)*(dNjdeta/Jeta) )*Jacobi)
+                            
+                            K[2*(xbasisi-i+1) + ybasisi-j+1][2*(xbasisj-i+1)+(ybasisj-j+1)] += w[idxx]*w[idxy]*(((dNidxi/Jxi)*(dNjdxi/Jxi) + (dNidEta/Jeta)*(dNjdeta/Jeta) )*Jacobi)
             #* Calculating the Fe vector
-            for xbasisi in range(0,2):
-                for ybasisi in range(0,2): 
-                    fi = 2-(xi**2 + eta**2)
+            for xbasisi in range(i-1,i+1):
+                for ybasisi in range(j-1,j+1): 
+                    px = xi#knotvector_x[i+xbasisi-i+1]
+                    py = eta#knotvector_y[j+ybasisi-j+1]
+                    fi = 2-(px**2 + py**2)
                     Ni = R2(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                    F[2*xbasisi+ybasisi] += w[idxx]*w[idxy]*(fi*Ni*Jacobi)
+                    F[2*(xbasisi-i+1) + ybasisi-j+1] += w[idxx]*w[idxy]*(fi*Ni*Jacobi)
+    """
     if x2 == 1:
-        K[1:2][:] = 0
-        K[:][1:2] = 0
+        K[2:5,:] = 0
+        K[:,2:5] = 0
     if y2 == 1:
-        K[2:3][:] = 0
-        K[:][2:3] = 0
+        K[1,:] = 0
+        K[:,1] = 0
+        K[3,:] = 0
+        K[:,3] = 0"""
     return K,F
 
 def integrateElement(k,l,weigths,knotvector_u,knotvector_w,p,q):
@@ -148,12 +156,41 @@ def integrateElement(k,l,weigths,knotvector_u,knotvector_w,p,q):
 
     
     
-def assembly(K,F,Ke,Fe):
-    pass
+def assembly(K,F,Ke,Fe,elemx,elemy,p,q, xDivision, yDivision):
+    l = len(Fe)
+    idxs = []
+    for idxx in range(2):
+        for idxy in range(2):
+            idxs.append((elemx-p)*(xDivision+p+1)+(elemy-1) +idxx*(xDivision+p+1)+idxy)
+    for idxx,i in enumerate(idxs):
+        for idxy,j in enumerate(idxs):
+            K[i,j] += Ke[idxx,idxy]
+    for idx, i in enumerate(idxs):
+        F[i] += Fe[idx]
+    #K[elemx-1 + (elemy-1)*3] = K[0,0]
+
+    #K[idx:idx+len(Fe),idx:idx+len(Fe)] = Ke
+    return K,F
 def solve(K,F):
-    u = np.dot(np.linalg.inv(K),F)
-    print("U:\n",u)
-    return u
+    dirichlet = [3,7,11,12,13,14,15]
+    k = 16
+    mask = np.ones((16, 16), dtype=bool)
+    for i in dirichlet:
+        mask[i,:] = False
+        mask[:,i] = False
+    #mask[np.ix_(dirichlet, dirichlet)] = False
+    tmp = K[mask]
+    filtered_K = K[mask].reshape(k - len(dirichlet), k - len(dirichlet))
+    mask = np.ones(16, dtype=bool)
+    mask[np.ix_(dirichlet)] = False
+    filtered_F = F[mask].reshape(k - len(dirichlet))
+    
+    u = np.dot(np.linalg.inv(filtered_K),filtered_F)
+    print("\nU:\n",u)
+    u_orig = u
+    for i in dirichlet:
+        u_orig = np.insert(u_orig,i,0)
+    return u_orig
 def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_w,p,q,calc_error = True):
     
     fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
@@ -168,9 +205,9 @@ def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvecto
             xPoints.append(koordinate[0])  
             yPoints.append(koordinate[1])  
             res  = 0
-            for i in range(0,2):
-                for j in range(0,2):
-                    res += result[2*j+i]*R2(k,l,i,j,koordinate[0],koordinate[1],weigths,knotvector_u,knotvector_w,p,q)
+            for i in range(0,4):
+                for j in range(0,4):
+                    res += result[4*i+j]*R2(k,l,i,j,koordinate[0],koordinate[1],weigths,knotvector_u,knotvector_w,p,q)
             zPoints.append(res) 
             zRes.append( 0.5*(koordinate[0]**2-1)*(koordinate[1]**2-1))
     ax.scatter(xPoints,yPoints,zPoints)#, edgecolors='face')

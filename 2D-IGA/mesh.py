@@ -25,8 +25,8 @@ def getDefaultValues():
     y1 = 1
     p = 1
     q = 1
-    xDivision = 1
-    yDivision = 1
+    xDivision = 2
+    yDivision = 2
     return x0, y0,x1,y1,xDivision,yDivision,p,q
 if __name__ == "__main__":
     x0 = 0

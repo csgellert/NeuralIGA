@@ -3,8 +3,10 @@ import numpy as np
 import FEM
 from mesh import generateRectangularMesh, getDefaultValues, getDirichletPoints
 from math import sqrt
+
+Nurbs_basis = True
 #defining geometry:
-default = getDefaultValues(div=0,order=2)
+default = getDefaultValues(div=2,order=3)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = generateRectangularMesh(*default)
 assert p==q and xDivision == yDivision
@@ -25,7 +27,10 @@ F = np.zeros((xDivision+p+1)*(yDivision+q+1))
 for elemx in range(p,p+xDivision+1):
     for elemy in range(q,q+xDivision+1):
         #Ke,Fe = FEM.element(p,q,knotvector_u,knotvector_w,None,elemx,elemy,NControl_u,NControl_w,weigths,ctrlpts)
-        Ke,Fe = FEM.elemantBspline(p,q,knotvector_u,knotvector_w,None,elemx,elemy,NControl_u,NControl_w,weigths,None)
+        if Nurbs_basis:
+            Ke,Fe = FEM.element(p,q,knotvector_u,knotvector_w,None,elemx,elemy,NControl_u,NControl_w,weigths,ctrlpts)
+        else:
+            Ke,Fe = FEM.elemantBspline(p,q,knotvector_u,knotvector_w,None,elemx,elemy,NControl_u,NControl_w,weigths,None)
         K,F = FEM.assembly(K,F,Ke,Fe,elemx,elemy,p,q,xDivision,yDivision)
         print(elemx)
         #K[elemx-1:ke_dim+elemx-1,elemy-1:ke_dim+elemy-1] += Ke
@@ -38,6 +43,9 @@ print(dirichlet)
 result = FEM.solve(K,F,dirichlet)
 #NURBS.plotNURBSbasisFunction(NControl_u,NControl_w,2,1,weigths,knotvector_u,knotvector_w,p,q,NURBS.R2)
 #FEM.visualizeResults_new(ctrlpts,result,NControl_u,NControl_w,weigths,knotvector_u,knotvector_w,p,q)
-FEM.visualizeResultsBspline(result,p,q,knotvector_u,knotvector_w)
+if Nurbs_basis:
+    FEM.visualizeResults(Surfacepoints, ctrlpts, result,NControl_u,NControl_w,weigths,knotvector_u,knotvector_w,p,q)
+else:
+    FEM.visualizeResultsBspline(result,p,q,knotvector_u,knotvector_w)
 #NURBS.plot_surface(Surfacepoints,ctrlpts)
 

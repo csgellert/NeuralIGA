@@ -68,8 +68,8 @@ def dR2dEta(k,l,i,j,u,w,weigths,knotvector_u,knotvector_w,p,q):
     denominator = W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)*W2(k,l,u,w,weigths,knotvector_u,knotvector_w,p,q)
     return weigths[j][i]*B(u,p,i,knotvector_u)*numerator/denominator
 def plotNURBSbasisFunction(k,l,i,j,weigths,knotvector_u,knotvector_w,p,q,fun):
-    x = np.linspace(0,1,20)
-    y = np.linspace(0,1,20)
+    x = np.linspace(0,1,50)
+    y = np.linspace(0,1,50)
     fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
     xPoints = []
     yPoints = []
@@ -144,14 +144,14 @@ def plot_surface(surface,ctrlpts):
 
 
 
-surface = True
+surface = False
 if __name__== "__main__":
     GY = math.sqrt(2)/2
     PP2 = math.pi/2
     if not surface:
         #circle
         order = 2
-        ctrlpts=   [[1,0,1],
+        """ctrlpts=   [[1,0,1],
                     [1,1,1],
                     [0,1,1],
                     [-1,1,1],
@@ -163,13 +163,24 @@ if __name__== "__main__":
         weigths = [1,GY,1,GY,1,GY,1,GY,1]
         knotvector = [0,0,0,PP2,PP2,2*PP2,2*PP2,3*PP2,3*PP2,4*PP2,4*PP2,4*PP2]
         x = np.linspace(0,PP2*4,1000)
-        NControl = 9
+        NControl = 9"""
+        # liear
+        ctrlpts = [[0,0,1],
+                   [0.5,0,1],
+                   [1,0,1],
+                   [1.5,0,1],
+                   [2,0,1]]
+        weigths = [1,1,1,1,1]
+        knotvector = [0,0,0,0.66,1.33,2,2,2]
+        NControl = 5
+        x = np.linspace(0,2,10)
+
         Curvepoints = [Curve(NControl,xx,weigths,knotvector,order,ctrlpts) for xx in x]
         derivative = [CurveDerivative(NControl,xx,weigths,knotvector,order,ctrlpts) for xx in x]
         #print(Curvepoints)
         #plotcurve(Curvepoints,ctrlpts,weigths)
         plotBsplineBasis(x,knotvector,order,derivative=True, sum=False)
-        plotcurve(derivative,ctrlpts,weigths)
+        plotcurve(Curvepoints,ctrlpts,weigths)
     else:
         p = 2
         q = 1

@@ -4,14 +4,14 @@ import FEM
 from mesh import generateRectangularMesh, getDefaultValues, getDirichletPoints
 from math import sqrt
 #defining geometry:
-default = getDefaultValues()
+default = getDefaultValues(div=0,order=2)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = generateRectangularMesh(*default)
-assert p==1 and q==1
+assert p==q and xDivision == yDivision
 x = np.linspace(x0,x1,10)
-y = np.linspace(y0,y1,7)
+y = np.linspace(y0,y1,10)
 NControl_u = len(knotvector_u)-p-1
-NControl_w = len(knotvector_w)-p-1
+NControl_w = len(knotvector_w)-q-1
 
 Surfacepoints = []
 for xx in x:
@@ -20,11 +20,12 @@ for xx in x:
 #print(Curvepoints)
 #print(Surfacepoints)
 #ke_dim = (p+1)*(q+1)# dimension of the elemntmatrix
-K = np.zeros(((xDivision+1+1)*(yDivision+1+1),(xDivision+1+1)*(yDivision+1+1)))
-F = np.zeros((xDivision+1+1)*(yDivision+1+1))
+K = np.zeros(((xDivision+p+1)*(yDivision+q+1),(xDivision+p+1)*(yDivision+q+1)))
+F = np.zeros((xDivision+p+1)*(yDivision+q+1))
 for elemx in range(p,p+xDivision+1):
     for elemy in range(q,q+xDivision+1):
-        Ke,Fe = FEM.element(p,q,knotvector_u,knotvector_w,None,elemx,elemy,NControl_u,NControl_w,weigths)
+        #Ke,Fe = FEM.element(p,q,knotvector_u,knotvector_w,None,elemx,elemy,NControl_u,NControl_w,weigths,ctrlpts)
+        Ke,Fe = FEM.elemantBspline(p,q,knotvector_u,knotvector_w,None,elemx,elemy,NControl_u,NControl_w,weigths,None)
         K,F = FEM.assembly(K,F,Ke,Fe,elemx,elemy,p,q,xDivision,yDivision)
         print(elemx)
         #K[elemx-1:ke_dim+elemx-1,elemy-1:ke_dim+elemy-1] += Ke
@@ -36,7 +37,7 @@ dirichlet = getDirichletPoints(int(sqrt(len(F))))
 print(dirichlet)
 result = FEM.solve(K,F,dirichlet)
 #NURBS.plotNURBSbasisFunction(NControl_u,NControl_w,2,1,weigths,knotvector_u,knotvector_w,p,q,NURBS.R2)
-FEM.visualizeResults(Surfacepoints,ctrlpts,result,NControl_u,NControl_w,weigths,knotvector_u,knotvector_w,p,q)
-
+#FEM.visualizeResults_new(ctrlpts,result,NControl_u,NControl_w,weigths,knotvector_u,knotvector_w,p,q)
+FEM.visualizeResultsBspline(result,p,q,knotvector_u,knotvector_w)
 #NURBS.plot_surface(Surfacepoints,ctrlpts)
 

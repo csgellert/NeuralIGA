@@ -77,7 +77,7 @@ def gaussIntegrateElement(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nCon
                     f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                     sum += Jxi*Jeta*w[idxx]*w[idxy]*f
     return sum
-def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths):
+def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
     """
     p - order in x direction
     q - order in y direction
@@ -87,7 +87,7 @@ def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths)
     i: ith element in x direction
     j: jth element in y direction
     """
-    assert q==1 and p == 1 
+    assert q==p
     #* Defining Gauss points
     g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
     w = np.array([1,1])
@@ -98,8 +98,52 @@ def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths)
     sum = 0
     K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
     F = np.zeros((p+1)*(q+1))
-    K = np.zeros((4,4))
-    F = np.zeros(4)
+    #K = np.zeros((4,4))
+    #F = np.zeros(4)
+    for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
+        for idxy,gpy in enumerate(g): #iterate throug Gauss points functions in y direction
+            xi = (x2-x1)/2 * gpx + (x2+x1)/2
+            eta = (y2-y1)/2 * gpy + (y2+y1)/2
+            Jxi = (x2-x1)/2
+            Jeta = (y2-y1)/2
+            Jacobi = Jxi*Jeta
+            #Jxi=1
+            #Jeta=1
+            #Jacobi = 1/Jacobi
+            #*CAlculating the Ke
+            for xbasisi in range(i-p,i+1):
+                for ybasisi in range(j-q,j+1): 
+                    for xbasisj in range(i-p,i+1):
+                        for ybasisj in range(j-q,j+1): 
+                            #f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            dNidxi = dR2dXi(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            dNidEta = dR2dEta(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            dNjdxi = dR2dXi(nControlx,nControly,xbasisj,ybasisj,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            dNjdeta = dR2dEta(nControlx,nControly,xbasisj,ybasisj,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            
+                            K[(p+1)*(xbasisi-i+1) + ybasisi-j+1][(p+1)*(xbasisj-i+1)+(ybasisj-j+1)] += w[idxx]*w[idxy]*(((dNidxi/Jxi)*(dNjdxi/Jxi) + (dNidEta/Jeta)*(dNjdeta/Jeta) )*Jacobi)
+            #* Calculating the Fe vector
+            for xbasisi in range(i-p,i+1):
+                for ybasisi in range(j-q,j+1): 
+                    px = Surface(nControlx,nControly,xi,eta,weigths,knotvector_x,knotvector_y,p,q,ctrlpts)[0]#xi#knotvector_x[i+xbasisi-i+1]
+                    py = Surface(nControlx,nControly,xi,eta,weigths,knotvector_x,knotvector_y,p,q,ctrlpts)[1]#eta#knotvector_y[j+ybasisi-j+1]
+                    fi = 2-(px**2 + py**2)
+                    Ni = R2(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                    F[(p+1)*(xbasisi-i+1) + ybasisi-j+1] += w[idxx]*w[idxy]*(fi*Ni*Jacobi)
+    return K,F
+def elemantBspline(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
+    assert q==p
+    #* Defining Gauss points
+    g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
+    w = np.array([1,1])
+    x1 = knotvector_x[i]
+    x2 = knotvector_x[i+1]
+    y1 = knotvector_y[j]
+    y2 = knotvector_y[j+1]
+    K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
+    F = np.zeros((p+1)*(q+1))
+    #K = np.zeros((4,4))
+    #F = np.zeros(4)
     for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
         for idxy,gpy in enumerate(g): #iterate throug Gauss points functions in y direction
             xi = (x2-x1)/2 * gpx + (x2+x1)/2
@@ -109,27 +153,82 @@ def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths)
             Jacobi = Jxi*Jeta
             Jxi=1
             Jeta=1
-            Jacobi = 1
+            #Jacobi = 1/Jacobi
             #*CAlculating the Ke
-            for xbasisi in range(i-1,i+1):
-                for ybasisi in range(j-1,j+1): 
-                    for xbasisj in range(i-1,i+1):
-                        for ybasisj in range(j-1,j+1): 
+            for xbasisi in range(i-p,i+1):
+                for ybasisi in range(j-q,j+1): 
+                    for xbasisj in range(i-p,i+1):
+                        for ybasisj in range(j-q,j+1): 
+                            #f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            dNidxi = dBdXi(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
+                            dNidEta = B(xi, p, xbasisi,knotvector_x)*dBdXi(eta,q,ybasisi,knotvector_y)
+                            dNjdxi = dBdXi(xi,p,xbasisj,knotvector_x)*B(eta,q,ybasisj,knotvector_y)
+                            dNjdeta = B(xi,p,xbasisj,knotvector_x)*dBdXi(eta,q,ybasisj,knotvector_y)
+                            
+                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += w[idxx]*w[idxy]*(((dNidxi/Jxi)*(dNjdxi/Jxi) + (dNidEta/Jeta)*(dNjdeta/Jeta) )*Jacobi)
+            #* Calculating the Fe vector
+            for xbasisi in range(i-p,i+1):
+                for ybasisi in range(j-q,j+1): 
+                    px = xi
+                    py = eta
+                    fi = 2-(px**2 + py**2)
+                    Ni = B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
+                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni*Jacobi)
+    return K,F
+def element_new(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
+    """
+    p - order in x direction
+    q - order in y direction
+    knotvector_x - knotvector in x direction
+    knotvector_y - knotvector in y direction
+    ed - TODO
+    i: ith element in x direction
+    j: jth element in y direction
+    """
+    assert q==p
+    #* Defining Gauss points
+    g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
+    w = np.array([1,1])
+    x1 = Surface(nControlx,nControly,knotvector_x[i],knotvector_y[j], weigths,knotvector_x,knotvector_y,p,q,ctrlpts)[0]#knotvector_x[i]
+    x2 = Surface(nControlx,nControly,knotvector_x[i+1],knotvector_y[j], weigths,knotvector_x,knotvector_y,p,q,ctrlpts)[0]
+    y1 = Surface(nControlx,nControly,knotvector_x[i],knotvector_y[j], weigths,knotvector_x,knotvector_y,p,q,ctrlpts)[1]
+    y2 = Surface(nControlx,nControly,knotvector_x[i],knotvector_y[j+1], weigths,knotvector_x,knotvector_y,p,q,ctrlpts)[1]
+    K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
+    F = np.zeros((p+1)*(q+1))
+    for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
+        for idxy,gpy in enumerate(g): #iterate throug Gauss points functions in y direction
+            xi = (x2-x1)/2 * gpx + (x2+x1)/2
+            eta = (y2-y1)/2 * gpy + (y2+y1)/2
+            Jxi = (x2-x1)/2
+            Jeta = (y2-y1)/2
+            Jacobi = Jxi*Jeta
+            Jxi = 1
+            Jeta = 1
+            Jacobi = 1
+
+            # J = [[Jxi, 0], [0,Jeta]]
+            # Jacobi = np.linalg.inv(J)
+            # Jacobi = np.linalg.det(Jacobi)
+            #*CAlculating the Ke
+            for xbasisi in range(i-p,i+1):
+                for ybasisi in range(j-q,j+1): 
+                    for xbasisj in range(i-p,i+1):
+                        for ybasisj in range(j-q,j+1): 
                             #f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                             dNidxi = dR2dXi(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                             dNidEta = dR2dEta(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                             dNjdxi = dR2dXi(nControlx,nControly,xbasisj,ybasisj,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                             dNjdeta = dR2dEta(nControlx,nControly,xbasisj,ybasisj,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                             
-                            K[2*(xbasisi-i+1) + ybasisi-j+1][2*(xbasisj-i+1)+(ybasisj-j+1)] += w[idxx]*w[idxy]*(((dNidxi/Jxi)*(dNjdxi/Jxi) + (dNidEta/Jeta)*(dNjdeta/Jeta) )*Jacobi)
+                            K[(p+1)*(xbasisi-i+1) + ybasisi-j+1][(p+1)*(xbasisj-i+1)+(ybasisj-j+1)] += w[idxx]*w[idxy]*(((dNidxi/Jxi)*(dNjdxi/Jxi) + (dNidEta/Jeta)*(dNjdeta/Jeta) )*Jacobi)
             #* Calculating the Fe vector
-            for xbasisi in range(i-1,i+1):
-                for ybasisi in range(j-1,j+1): 
+            for xbasisi in range(i-p,i+1):
+                for ybasisi in range(j-q,j+1): 
                     px = xi#knotvector_x[i+xbasisi-i+1]
                     py = eta#knotvector_y[j+ybasisi-j+1]
                     fi = 2-(px**2 + py**2)
                     Ni = R2(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                    F[2*(xbasisi-i+1) + ybasisi-j+1] += w[idxx]*w[idxy]*(fi*Ni*Jacobi)
+                    F[(p+1)*(xbasisi-i+1) + ybasisi-j+1] += w[idxx]*w[idxy]*(fi*Ni*Jacobi)
     """
     if x2 == 1:
         K[2:5,:] = 0
@@ -159,9 +258,10 @@ def integrateElement(k,l,weigths,knotvector_u,knotvector_w,p,q):
 def assembly(K,F,Ke,Fe,elemx,elemy,p,q, xDivision, yDivision):
     l = len(Fe)
     idxs = []
-    for idxx in range(2):
-        for idxy in range(2):
-            idxs.append((elemx-p)*(xDivision+p+1)+(elemy-1) +idxx*(xDivision+p+1)+idxy)
+    for idxx in range(p+1):
+        for idxy in range(q+1):
+            idxs.append((elemx-p)*(xDivision+p+1)+(elemy-q) +idxx*(xDivision+p+1)+idxy)
+    print("idxs:",idxs)
     for idxx,i in enumerate(idxs):
         for idxy,j in enumerate(idxs):
             K[i,j] += Ke[idxx,idxy]
@@ -235,6 +335,70 @@ def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvecto
     #ax.scatter(x,y,z,c="r",marker="*")
     #plt.axis('equal')
     plt.show()
+def visualizeResults_new(ctrlpts, result,k,l,weigths,knotvector_u,knotvector_w,p,q,calc_error = True):
+    x = np.linspace(0,1,10)
+    y = np.linspace(0,1,10)
+    NControl_u = len(knotvector_u)-p-1
+    NControl_w = len(knotvector_w)-q-1
+    fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
+    xPoints = []
+    yPoints = []
+    zPoints = []
+    zRes = []
+    #result.append([0,0,0,0])
+    #plotBsplineBasis(np.linspace(0,1,100), knotvector_u,p)
+    for xx in x:
+        for yy in y:
+            xPoints.append(Surface(NControl_u,NControl_w,xx,yy,weigths,knotvector_u,knotvector_w,p,q,ctrlpts)[0])  
+            yPoints.append(Surface(NControl_u,NControl_w,xx,yy,weigths,knotvector_u,knotvector_w,p,q,ctrlpts)[1])  
+            res  = 0
+            for i in range(0,k):
+                for j in range(0,l):
+                    res += result[k*i+j]*R2(k,l,i,j,xx,yy,weigths,knotvector_u,knotvector_w,p,q)
+            zPoints.append(res) 
+            zRes.append( 0.5*(xPoints[-1]**2-1)*(yPoints[-1]**2-1))
+    ax.scatter(xPoints,yPoints,zPoints)#, edgecolors='face')
+    ax.scatter(xPoints,yPoints,zRes)
+    if calc_error:
+        MSE = (np.square(np.array(zRes)-np.array(zPoints))).mean()
+        print(f"MSE: {MSE}")
+    #plot controlpoints:
+    x=[]
+    y=[]
+    z=[]
+    for j in ctrlpts:
+        for i in j:
+            x.append(i[0])
+            y.append(i[1])
+            z.append(i[2])
+    #ax.scatter(x,y,z,c="r",marker="*")
+    #plt.axis('equal')
+    plt.show()
+def visualizeResultsBspline(results,p,q,knotvector_x, knotvector_y):
+    xPoints = []
+    yPoints = []
+    result = []
+    analitical = []
+    x = np.linspace(0,1,10)
+    y = np.linspace(0,1,10)
+    for xx in x:
+        for yy in y:
+            sum = 0
+            xPoints.append(xx)
+            yPoints.append(yy)
+            analitical.append(0.5*(xx**2-1)*(yy**2-1))
+            for xbasis in range(len(knotvector_x)-p-1):
+                for ybasis in range(len(knotvector_y)-q-1):
+                    sum += B(xx,p,xbasis,knotvector_x)*B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
+            result.append(sum)
+    fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
+    ax.scatter(xPoints,yPoints,result)#, edgecolors='face')
+    ax.scatter(xPoints,yPoints,analitical)
+    
+    MSE = (np.square(np.array(result)-np.array(analitical))).mean()
+    print(f"MSE: {MSE}")
+    plt.show()
+
 def calculateError(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_w,p,q):
     zPoints = []
     zRes = []
@@ -251,7 +415,27 @@ def calculateError(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_
     MSE = (np.square(np.array(zRes)-np.array(zPoints))).mean()
     #print(f"MSE: {MSE}")
     return(MSE)
- 
+def calculateErrorBspline(surface, ctrlpts, results,k,l,weigths,knotvector_u,knotvector_w,p,q):
+    xPoints = []
+    yPoints = []
+    result = []
+    analitical = []
+    x = np.linspace(0,1,10)
+    y = np.linspace(0,1,10)
+    for xx in x:
+        for yy in y:
+            sum = 0
+            xPoints.append(xx)
+            yPoints.append(yy)
+            analitical.append(0.5*(xx**2-1)*(yy**2-1))
+            for xbasis in range(len(knotvector_u)-p-1):
+                for ybasis in range(len(knotvector_w)-q-1):
+                    sum += B(xx,p,xbasis,knotvector_u)*B(yy,q,ybasis,knotvector_w)*results[(len(knotvector_u)-p-1)*xbasis+ybasis]
+            result.append(sum)
+    
+    MSE = (np.square(np.array(result)-np.array(analitical))).mean()
+    print(f"MSE: {MSE}")
+    return MSE
 def gaussLagandereQuadratureBasisfunction(i,knotvector, order, gaussPoints=1, func=B):
     if gaussPoints == 1:
         g = [-1/math.sqrt(3), 1/math.sqrt(3)]
@@ -279,7 +463,27 @@ def RectangleIntegration(knotvector, i, order, division,func=B):
     for xx in x:
         sum += func(xx,order,i,knotvector)*dx
     return sum
-
+def RectangleIntegration2D(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
+    assert q==p
+    #* Defining Gauss points
+    g = np.linspace(0,0.25,100)
+    dx = g[-1]-g[-2]
+    K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
+    for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
+        for idxy,gpy in enumerate(g): #iterate throug Gauss points functions in y direction
+            #*CAlculating the Ke
+            for xbasisi in range(i-p,i+1):
+                for ybasisi in range(j-q,j+1): 
+                    for xbasisj in range(i-p,i+1):
+                        for ybasisj in range(j-q,j+1): 
+                            #f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            dNidxi = dR2dXi(nControlx,nControly,xbasisi,ybasisi,gpx,gpy,weigths,knotvector_x,knotvector_y,p,q)
+                            dNidEta = dR2dEta(nControlx,nControly,xbasisi,ybasisi,gpx,gpy,weigths,knotvector_x,knotvector_y,p,q)
+                            dNjdxi = dR2dXi(nControlx,nControly,xbasisj,ybasisj,gpx,gpy,weigths,knotvector_x,knotvector_y,p,q)
+                            dNjdeta = dR2dEta(nControlx,nControly,xbasisj,ybasisj,gpx,gpy,weigths,knotvector_x,knotvector_y,p,q)
+                            
+                            K[(p+1)*(xbasisi-i+1) + ybasisi-j+1][(p+1)*(xbasisj-i+1)+(ybasisj-j+1)] += (((dNidxi)*(dNjdxi) + (dNidEta)*(dNjdeta)))*dx*dx
+    return K
 
 
 #* TEST
@@ -308,7 +512,7 @@ if __name__ == "__main__":
     #* TEST Integration
     i = 3
     iRe = RectangleIntegration(t,i,k,50000)
-    iGaLA = gaussLagandereQuadratureBasisfunction(i,t,k,2)
+    iGaLA = gaussLagandereQuadratureBasisfunction(i,t,k,1)
     print(f"Rectangle: {iRe}\tGauss: {iGaLA}")
      #element(2,2,t,t,None,1,1)
     plt.show()

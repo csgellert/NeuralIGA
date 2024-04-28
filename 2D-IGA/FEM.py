@@ -248,20 +248,24 @@ def visualizeResultsBspline(results,p,q,knotvector_x, knotvector_y):
     plt.show()
 
 def calculateError(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_w,p,q):
+    xPoints = []
+    yPoints = []
     zPoints = []
     zRes = []
-    #result.append([0,0,0,0])
-    #plotBsplineBasis(np.linspace(0,1,100), knotvector_u,p)
     for surfpoint in surface:
         for koordinate in surfpoint:
+            xPoints.append(koordinate[0])  
+            yPoints.append(koordinate[1])  
             res  = 0
             for i in range(0,k):
                 for j in range(0,l):
                     res += result[k*i+j]*R2(k,l,i,j,koordinate[0],koordinate[1],weigths,knotvector_u,knotvector_w,p,q)
             zPoints.append(res) 
             zRes.append( 0.5*(koordinate[0]**2-1)*(koordinate[1]**2-1))
-    MSE = (np.square(np.array(zRes)-np.array(zPoints))).mean()
-    #print(f"MSE: {MSE}")
+    if True:
+        MSE = (np.square(np.array(zRes)-np.array(zPoints))).mean()
+        print(f"MSE: {MSE}")
+
     return(MSE)
 def calculateErrorBspline(surface, ctrlpts, results,k,l,weigths,knotvector_u,knotvector_w,p,q):
     xPoints = []

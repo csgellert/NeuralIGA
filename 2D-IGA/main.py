@@ -4,9 +4,9 @@ import FEM
 from mesh import generateRectangularMesh, getDefaultValues, getDirichletPoints
 from math import sqrt
 
-Nurbs_basis = True
+Nurbs_basis = False
 #defining geometry:
-default = getDefaultValues(div=2,order=3)
+default = getDefaultValues(div=2,order=1)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = generateRectangularMesh(*default)
 assert p==q and xDivision == yDivision

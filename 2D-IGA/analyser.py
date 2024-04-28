@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 test_values = [0,1,2,3,4,5]
 accuracy = []
 for division in test_values:
-    default = mesh.getDefaultValues(division,order=3)
+    default = mesh.getDefaultValues(division,order=1)
     x0, y0,x1,y1,xDivision,yDivision,p,q = default
     knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
     assert p==q

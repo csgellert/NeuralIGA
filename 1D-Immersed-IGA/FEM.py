@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 def element(i, knotvector, p):
+    DO_SUBDIV = True
     g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
     w = np.array([1,1])
     Ke = np.zeros((p+1,p+1))
@@ -11,8 +12,8 @@ def element(i, knotvector, p):
     x2 = knotvector[i+1+p]
     J = 1#(x2-x1)/2
     Ji = 1/J
-    if True and (x1 <= 0 or x2>=10):
-        Ket, Fet = Subdivide(x1,x2,i,knotvector,p,0,MAXLEVEL=4)
+    if DO_SUBDIV and (x1 <= 0 or x2>=10):
+        Ket, Fet = Subdivide(x1,x2,i,knotvector,p,0,MAXLEVEL=8)
         Ke+= Ket
         Fe+= Fet 
         return Ke, Fe
@@ -46,11 +47,11 @@ def Subdivide(x1,x2,i,knotvector,p,level,MAXLEVEL=2):
         return K,F
     else:
         Kret,Fret=Subdivide(x1,halfx,i,knotvector,p,level+1,MAXLEVEL)
-        K+= Kret
-        F+=Fret
+        K+= Kret/2
+        F+=Fret/2
         Kret,Fret=Subdivide(halfx,x2,i,knotvector,p,level+1,MAXLEVEL)
-        K+= Kret
-        F+=Fret
+        K+= Kret/2
+        F+=Fret/2
         return K,F
 def GaussQuadrature(x1,x2,i,p,knotvector):
     g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
@@ -97,9 +98,9 @@ def solve(F,K):
     return u
 def evaluate(u,t,p,xx):
     sum = np.zeros(xx.shape)
-    for i in range(1,len(t)-p-1):
+    for i in range(0,len(u)):
         Ni = np.array([disctance(x)*B(x,p,i,t) for x in xx])
-        ui = u[i-1]
+        ui = u[i]
         Ni = ui*Ni
         sum +=Ni
     #sum = np.zeros(xx.shape)

@@ -16,7 +16,7 @@ uBe = 0
 l = xBe-xAe # length of the domain
 
 #Number of points
-N =100
+N =30
 p = 1 
 
 # defining the domain 
@@ -31,7 +31,7 @@ plotBsplineBasis(x,knots,p,True)
 K = np.zeros((N+p-1,N+p-1))
 F = np.zeros(N+p-1)
 for i in range(N-1):
-    print(i)
+    #print(i)
     Ke,Fe = FEM.element(i,knots,p)
     K,F = FEM.assembly(K,F,Ke,Fe,i)
 print(K[1:2,1:3])

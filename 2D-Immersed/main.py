@@ -8,7 +8,7 @@ import time
 Nurbs_basis = False
 r=1
 #defining geometry:
-default = mesh.getDefaultValues(div=1,order=2,delta=0.1)
+default = mesh.getDefaultValues(div=3,order=1,delta=0.05)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
 assert p==q and xDivision == yDivision
@@ -16,7 +16,7 @@ x = np.linspace(x0,x1,10)
 y = np.linspace(y0,y1,10)
 NControl_u = len(knotvector_u)-p-1
 NControl_w = len(knotvector_w)-q-1
-mesh.plotMesh(xDivision,yDivision,delta=0.1)
+mesh.plotMesh(xDivision,yDivision,delta=0.05)
 Surfacepoints = []
 if Nurbs_basis:
     for xx in x:

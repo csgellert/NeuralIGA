@@ -59,6 +59,8 @@ def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,
     return K,F
 def elemantBspline(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
     assert q==p
+    SUBDIVISION = 1
+    DOSUBDIV = True
     #* Defining Gauss points
     g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
     w = np.array([1,1])
@@ -68,36 +70,9 @@ def elemantBspline(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,w
     y2 = knotvector_y[j+1]
     K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
     F = np.zeros((p+1)*(q+1))
-    for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
-        for idxy,gpy in enumerate(g): #iterate throug Gauss points functions in y direction
-            xi = (x2-x1)/2 * gpx + (x2+x1)/2
-            eta = (y2-y1)/2 * gpy + (y2+y1)/2
-            Jxi = (x2-x1)/2
-            Jeta = (y2-y1)/2
-            Jacobi = Jxi*Jeta
-            d = mesh.distanceFromContur(xi,eta)
-            #*CAlculating the Ke
-            for xbasisi in range(i-p,i+1):
-                for ybasisi in range(j-q,j+1): 
-                    for xbasisj in range(i-p,i+1):
-                        for ybasisj in range(j-q,j+1): 
-                            #f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                            dNidxi = dBdXi(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                            dNidEta = B(xi, p, xbasisi,knotvector_x)*dBdXi(eta,q,ybasisi,knotvector_y)
-                            dNjdxi = dBdXi(xi,p,xbasisj,knotvector_x)*B(eta,q,ybasisj,knotvector_y)
-                            dNjdeta = B(xi,p,xbasisj,knotvector_x)*dBdXi(eta,q,ybasisj,knotvector_y)
-                            Ni = B(eta,q,ybasisi,knotvector_y)*B(xi,q,xbasisi,knotvector_x)
-                            #correction with the distance function
-                            diCorrXi = dNidxi*d + mesh.dddx(xi,eta) * Ni
-                            diCorrEta = dNidEta*d + mesh.dddy(xi,eta) * Ni
-                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += w[idxx]*w[idxy]*(((diCorrXi)*(dNjdxi) + (diCorrEta)*(dNjdeta))*Jacobi)
-            for xbasisi in range(i-p,i+1):
-                for ybasisi in range(j-q,j+1): 
-                    px = xi
-                    py = eta
-                    fi = 2-(px**2 + py**2)
-                    Ni = B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni*Jacobi)
+    #doing subdivision
+    if DOSUBDIV:
+        K,F = Subdivide(x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,level=0,MAXLEVEL=0)
     return K,F
 def boundaryElementBspline(r,p,q,knotvector_x, knotvector_y,i,j,nControlx, nControly):
     assert q==p
@@ -114,26 +89,46 @@ def boundaryElementBspline(r,p,q,knotvector_x, knotvector_y,i,j,nControlx, nCont
     F = np.zeros((p+1)*(q+1))
     #doing subdivision
     if DOSUBDIV:
-        halfx = (x1+x2)/2
-        halfy = (y1+y2)/2
+        K,F = Subdivide(x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,level=0,MAXLEVEL=3)
+    return K,F
+def Subdivide(x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,level,MAXLEVEL=2):
+    halfx = (x1+x2)/2
+    halfy = (y1+y2)/2
+    K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
+    F = np.zeros((p+1)*(q+1))
+    r=1 #! Ez hardcodolva van!!!
+    if level == MAXLEVEL:
         #first
         Ks,Fs = GaussQuadrature(x1, halfx,y1,halfy,r,i,j,p,q,knotvector_x,knotvector_y)
-        K+=Ks
-        F+=Fs
+        K+=Ks/4
+        F+=Fs/4
         #second
         Ks,Fs = GaussQuadrature(halfx, x2,y1,halfy,r,i,j,p,q,knotvector_x,knotvector_y)
-        K+=Ks
-        F+=Fs
+        K+=Ks/4
+        F+=Fs/4
         #third
         Ks,Fs = GaussQuadrature(x1, halfx,halfy,y2,r,i,j,p,q,knotvector_x,knotvector_y)
-        K+=Ks
-        F+=Fs
+        K+=Ks/4
+        F+=Fs/4
         #fourth
         Ks,Fs = GaussQuadrature(halfx, x2,halfy,y2,r,i,j,p,q,knotvector_x,knotvector_y)
-        K+=Ks
-        F+=Fs
-    
-    return K,F
+        K+=Ks/4
+        F+=Fs/4
+        return K,F
+    else:
+        Kret,Fret=Subdivide(x1,halfx,y1,halfy,i,j,knotvector_x,knotvector_y,p,q,level+1,MAXLEVEL)
+        K+= Kret/4
+        F+=Fret/4
+        Kret,Fret=Subdivide(x1,halfx,halfy,y2,i,j,knotvector_x,knotvector_y,p,q,level+1,MAXLEVEL)
+        K+= Kret/4
+        F+=Fret/4
+        Kret,Fret=Subdivide(halfx,x2,y1,halfy,i,j,knotvector_x,knotvector_y,p,q,level+1,MAXLEVEL)
+        K+= Kret/4
+        F+=Fret/4
+        Kret,Fret=Subdivide(halfx,x2,halfy,y2,i,j,knotvector_x,knotvector_y,p,q,level+1,MAXLEVEL)
+        K+= Kret/4
+        F+=Fret/4
+        return K,F
 def GaussQuadrature(x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
     g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
     w = np.array([1,1])
@@ -148,7 +143,7 @@ def GaussQuadrature(x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
             Jxi = (x2-x1)/2
             Jeta = (y2-y1)/2
             Jacobi = Jxi*Jeta
-            #Jacobi = 1/Jacobi
+            Jacobi = 1
             #*CAlculating the Ke
             for xbasisi in range(i-p,i+1):
                 for ybasisi in range(j-q,j+1): 
@@ -160,18 +155,21 @@ def GaussQuadrature(x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
                             dNjdxi = dBdXi(xi,p,xbasisj,knotvector_x)*B(eta,q,ybasisj,knotvector_y)
                             dNjdeta = B(xi,p,xbasisj,knotvector_x)*dBdXi(eta,q,ybasisj,knotvector_y)
                             
-                            Ni = B(eta,q,ybasisi,knotvector_y)*B(xi,q,xbasisi,knotvector_x)
+                            Ni = B(eta,q,ybasisi,knotvector_y)*B(xi,p,xbasisi,knotvector_x)
+                            Nj = B(eta,q,ybasisj,knotvector_y)*B(xi,p,xbasisj,knotvector_x)
                             #correction with the distance function
                             diCorrXi = dNidxi*d + mesh.dddx(xi,eta) * Ni
                             diCorrEta = dNidEta*d + mesh.dddy(xi,eta) * Ni
-                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += w[idxx]*w[idxy]*(((diCorrXi)*(dNjdxi) + (diCorrEta)*(dNjdeta))*Jacobi)
+                            djCorrXi = dNjdxi*d + mesh.dddx(xi,eta) * Nj
+                            djCorrEta = dNjdeta*d + mesh.dddy(xi,eta) * Nj
+                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += w[idxx]*w[idxy]*(((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta))*Jacobi)
             #* Calculating the Fe vector
             for xbasisi in range(i-p,i+1):
                 for ybasisi in range(j-q,j+1): 
                     px = xi
                     py = eta
-                    fi = 2-(px**2 + py**2)
-                    Ni = B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
+                    fi = -8*xi
+                    Ni = d*B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
                     F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += (w[idxx]*w[idxy]*(fi*Ni*Jacobi))
     return K,F
 def elementChoose(Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
@@ -187,19 +185,20 @@ def elementChoose(Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, 
     innerElement = True # all points are inside the body
     outerElement = True # all points are outside the body
     for point in distances:
-        if point<r:
+        if point>r:
             innerElement = False
         else:
             outerElement = False
     if innerElement: #regular element
-        Ke, Fe = elemantBspline(p,q,knotvector_x, knotvector_y, None,i,j,nControlx, nControly,weigths,ctrlpts)
+        #Ke, Fe = elemantBspline(p,q,knotvector_x, knotvector_y, None,i,j,nControlx, nControly,weigths,ctrlpts)
+        Ke, Fe = elemantBspline(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts)
     elif outerElement:
         Ke = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
         Fe = np.zeros((p+1)*(q+1))
     else:
         Ke, Fe = boundaryElementBspline(r,p,q,knotvector_x, knotvector_y,i,j,nControlx, nControly)
     return Ke, Fe
-    
+   
 
 def assembly(K,F,Ke,Fe,elemx,elemy,p,q, xDivision, yDivision):
     l = len(Fe)
@@ -238,7 +237,12 @@ def solveWeak(K,F):
     K_reduced = K[~zero_rows][:, ~zero_cols]
     F_reduced = F[~zero_f]
     u = np.zeros(len(F))
-    u_reduced = np.dot(np.linalg.inv(K_reduced),F_reduced)
+    #u_reduced = np.dot(np.linalg.inv(K_reduced),F_reduced)
+    inv = np.linalg.inv(K_reduced)
+    #pinv = np.dot(np.linalg.inv(np.dot(np.transpose(K_reduced),K_reduced)),K_reduced)
+    #svd_inv = svd_inverse(K_reduced)
+    #reg_inv = regularized_inverse(K_reduced)
+    u_reduced = np.dot(inv,F_reduced)
     u[~zero_f] = u_reduced
     return u
 def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_w,p,q,calc_error = True):
@@ -278,19 +282,21 @@ def visualizeResultsBspline(results,p,q,knotvector_x, knotvector_y,surfacepoints
     yPoints = []
     result = []
     analitical = []
-    x = np.linspace(-1,1,10)
-    y = np.linspace(-1,1,10)
+    x = np.linspace(-1,1,20)
+    y = np.linspace(-1,1,20)
     for xx in x:
         for yy in y:
             sum = 0
             xPoints.append(xx)
             yPoints.append(yy)
-            analitical.append(0.5*(xx**2-1)*(yy**2-1))
             d = mesh.distanceFromContur(xx,yy)
+            analitical.append((xx*(xx**2 + yy**2 -1)) if d>=0 else 0)
+            
             for xbasis in range(len(knotvector_x)-p-1):
                 for ybasis in range(len(knotvector_y)-q-1):
                     sum += B(xx,p,xbasis,knotvector_x)*B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
-            sum = d*sum + (1-d)*0
+            sum = d*sum
+            if d<0: sum = 0
             result.append(sum)
     fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
     ax.scatter(xPoints,yPoints,result)#, edgecolors='face')
@@ -320,7 +326,7 @@ def plotDistanceField():
         for yy in y:
             xPoints.append(xx)
             yPoints.append(yy)
-            result.append(sigmoid(mesh.distanceFromContur(xx,yy)))
+            result.append(mesh.distanceFromContur(xx,yy))
     fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
     ax.scatter(xPoints,yPoints,result)#, edgecolors='face')
     plt.show()
@@ -347,6 +353,7 @@ def calculateErrorBspline(surface, ctrlpts, results,k,l,weigths,knotvector_u,kno
     analitical = []
     x = np.linspace(0,1,10)
     y = np.linspace(0,1,10)
+    print("D is not implemented")
     for xx in x:
         for yy in y:
             sum = 0
@@ -363,6 +370,14 @@ def calculateErrorBspline(surface, ctrlpts, results,k,l,weigths,knotvector_u,kno
     return MSE
 
 
+def svd_inverse(A):
+    U, s, V = np.linalg.svd(A)
+    s_rec = [1/i if i>1e-5 else 0 for i in s]
+    #s[s < 1e-9] = 0
+    A_inv = np.dot(V.T, np.dot(np.diag(s_rec), U.T))
+    return A_inv
+def regularized_inverse(A, lambda_val=1e-5):
+    return np.linalg.inv(A + lambda_val * np.eye(A.shape[0]))
 #* TEST
 if __name__ == "__main__":
     print("2D - Immersed - FEM.py")

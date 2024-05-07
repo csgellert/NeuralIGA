@@ -2,6 +2,9 @@ import numpy as np
 from NURBS import Surface, plot_surface
 from math import sqrt
 import matplotlib.pyplot as plt
+
+EPS = 0.9
+
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     assert x0 < x1 and y0 < y1
     knotvector_u = np.linspace(x0,x1,xDivision+2)
@@ -35,14 +38,30 @@ def getDefaultValues(div=2,order=1,delta = 0):
     return x0, y0,x1,y1,xDivision,yDivision,p,q
 def distanceFromContur(x,y):
     #Circle like domain
-    # Inside of the domain is negative so it is better compatible with the sigmoid function
-    R2 = 1*1
+    R2 = 1
     r = x**2 + y**2
-    return R2-r
+    d = R2-r
+    #d = 1 if abs(R2-sqrt(r)) > EPS else (R2-sqrt(r))/EPS
+    #if r>R2*R2: d = -1 
+    return d
 def dddx(x,y):
-    return 2*x
+    dx = -2*x
+    """
+    r2 = x*x + y*y
+    r = sqrt(r2)
+    dx = 0 if abs(r-1) > EPS else x*sqrt(EPS/(r2))
+    if r > 1: dx = 0"""
+
+    return dx
 def dddy(x,y):
-    return 2*y
+    dy = -2*y
+    """
+    r2 = x*x + y*y
+    r = sqrt(r2)
+    dy = 0 if abs(r-1) > EPS else y*sqrt(EPS/(r2))
+    if r > 1: dy = 0"""
+
+    return dy
 def plotMesh(xdiv=2, ydiv=3,delta=0):
     circle = plt.Circle((0, 0), 1, color='r')
     fig, ax = plt.subplots()
@@ -55,7 +74,28 @@ def plotMesh(xdiv=2, ydiv=3,delta=0):
     
     plt.grid(True)
     plt.show()
+def plotDisctancefunction():
+    x_values = np.linspace(0, 1.1, 1000)
+    y_values = np.linspace(0, 1.1, 1000)
+    X, Y = np.meshgrid(x_values, y_values)
+    Z = np.zeros((1000,1000))
+    # Evaluate the function at each point in the grid
+    for idxx, xx in enumerate(x_values):
+        for idxy,yy in enumerate(y_values):
+            Z[idxy, idxx] = distanceFromContur(xx,yy)
+
+    #Z = distanceFromContur(X, Y)
+
+    # Create a contour plot
+    plt.contourf(X, Y, Z,levels=20)
+    plt.colorbar(label='f(x, y)')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.title('Scalar-Valued Function f(x, y)')
+    plt.grid(True)
+    plt.show()
 if __name__ == "__main__":
+    plotDisctancefunction()
     plotMesh(1,1,0.1)
     x0 = -1
     x1 = 1

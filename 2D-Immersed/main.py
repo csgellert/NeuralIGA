@@ -8,7 +8,7 @@ import time
 Nurbs_basis = False
 r=1
 #defining geometry:
-default = mesh.getDefaultValues(div=3,order=1,delta=0.05)
+default = mesh.getDefaultValues(div=6,order=1,delta=0.05)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
 assert p==q and xDivision == yDivision
@@ -43,6 +43,6 @@ print(f"Calculation time: {time.time()-start} ms")
 if Nurbs_basis:
     FEM.visualizeResults(Surfacepoints, ctrlpts, result,NControl_u,NControl_w,weigths,knotvector_u,knotvector_w,p,q)
 else:
-    FEM.visualizeResultsBspline(result,p,q,knotvector_u,knotvector_w,NURBS.getCircularDomain())
+    FEM.visualizeResultsBspline(result,p,q,knotvector_u,knotvector_w,None)#NURBS.getCircularDomain()
 
 

@@ -3,7 +3,21 @@ from Geomertry import *
 import numpy as np
 import matplotlib.pyplot as plt
 import mesh
-
+import math
+FUNCTION_CASE = 2
+MAX_SUBDIVISION = 2
+def load_function(x,y):
+    #! -f(x)
+    if FUNCTION_CASE == 1:
+        return -8*x
+    elif FUNCTION_CASE == 2:
+        arg = (x**2 + y**2)*math.pi/2
+        return -(-2*math.pi*math.sin(arg)-math.cos(arg)*(x**2 + y**2)*math.pi**2)
+def solution_function(x,y):
+    if FUNCTION_CASE == 1:
+        return x*(x**2 + y**2 -1)
+    elif FUNCTION_CASE == 2:
+        return math.cos((x**2 + y**2)*math.pi/2)
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x*15))
 def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
@@ -89,7 +103,7 @@ def boundaryElementBspline(r,p,q,knotvector_x, knotvector_y,i,j,nControlx, nCont
     F = np.zeros((p+1)*(q+1))
     #doing subdivision
     if DOSUBDIV:
-        K,F = Subdivide(x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,level=0,MAXLEVEL=3)
+        K,F = Subdivide(x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,level=0,MAXLEVEL=MAX_SUBDIVISION)
     return K,F
 def Subdivide(x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,level,MAXLEVEL=2):
     halfx = (x1+x2)/2
@@ -166,9 +180,7 @@ def GaussQuadrature(x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
             #* Calculating the Fe vector
             for xbasisi in range(i-p,i+1):
                 for ybasisi in range(j-q,j+1): 
-                    px = xi
-                    py = eta
-                    fi = -8*xi
+                    fi = load_function(xi, eta)
                     Ni = d*B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
                     F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += (w[idxx]*w[idxy]*(fi*Ni*Jacobi))
     return K,F
@@ -290,7 +302,7 @@ def visualizeResultsBspline(results,p,q,knotvector_x, knotvector_y,surfacepoints
             xPoints.append(xx)
             yPoints.append(yy)
             d = mesh.distanceFromContur(xx,yy)
-            analitical.append((xx*(xx**2 + yy**2 -1)) if d>=0 else 0)
+            analitical.append(solution_function(xx,yy) if d>=0 else 0)
             
             for xbasis in range(len(knotvector_x)-p-1):
                 for ybasis in range(len(knotvector_y)-q-1):

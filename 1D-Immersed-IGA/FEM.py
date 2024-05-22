@@ -18,6 +18,7 @@ def element(i, knotvector, p):
         Fe+= Fet 
         return Ke, Fe
     for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
+        #print("something went wrong... We shouldnt be here..")
         xi = (x2-x1)/2 * gpx + (x2+x1)/2
         d = disctance(xi)
         if xi <0 or xi>10: continue
@@ -29,7 +30,8 @@ def element(i, knotvector, p):
                 Ke[xbasisi-(i),xbasisj-(i)] += (-10)*dgammai*dgammaj
         for xbasisi in range(i,i+p+1):
             f = math.sin(xi)
-            Fe[xbasisi-(i)] += f*d*B(xi,p,xbasisi,knotvector)
+            dgammai = d*dBdXi(xi,p,xbasisi,knotvector) + dd*B(xi,p,xbasisi,knotvector)
+            Fe[xbasisi-(i)] += f*d*B(xi,p,xbasisi,knotvector) + (1/10*dgammai*(-10))
     return Ke, Fe
 def Subdivide(x1,x2,i,knotvector,p,level,MAXLEVEL=2):
     halfx = (x1+x2)/2
@@ -71,7 +73,8 @@ def GaussQuadrature(x1,x2,i,p,knotvector):
                 Ke[xbasisi-(i),xbasisj-(i)] += (-10)*dgammai*dgammaj*J
         for xbasisi in range(i,i+p+1):
             f = math.sin(xi)
-            Fe[xbasisi-(i)] += f*d*B(xi,p,xbasisi,knotvector)*J
+            dgammai = d*dBdXi(xi,p,xbasisi,knotvector) + dd*B(xi,p,xbasisi,knotvector)
+            Fe[xbasisi-(i)] += f*d*B(xi,p,xbasisi,knotvector)*J + (1/10*dgammai*(-10))
     return Ke, Fe
 def u_star(x,xA=0,xB=10,uA=1,uB=0):
     w1 = x-xA

@@ -8,15 +8,15 @@ print("10 * d2u/dx2 = sin(x)\nu(0)=1\nu(0.5)=0")
 #Endpoints of the domain
 xAe = 0
 xBe = 10
-xA = xAe-0.1
-xB = xBe +0.1
+xA = xAe - 0.1
+xB = xBe + 0.1
 
 uAe = 1
 uBe = 0
 l = xBe-xAe # length of the domain
 
 #Number of points
-N =30
+N = 50
 p = 1 
 
 # defining the domain 

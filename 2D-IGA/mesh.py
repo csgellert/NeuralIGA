@@ -34,7 +34,7 @@ def getDirichletPoints(k):
     dirichlet = [i*k+k-1 for i in range(k-1)]
     for i in range(k):
         dirichlet.append(i+k*(k-1))
-    print(f"Dirichlet boundary: {dirichlet}")
+    #print(f"Dirichlet boundary: {dirichlet}")
     return dirichlet
     
 if __name__ == "__main__":

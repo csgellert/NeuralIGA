@@ -84,7 +84,7 @@ def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,
                     Ni = R2(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
                     F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni*Jacobi)
     return K,F
-def elemantBspline(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
+def elemantBspline(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts,loadfun):
     assert q==p
     #* Defining Gauss points
     g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
@@ -124,7 +124,7 @@ def elemantBspline(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,w
                 for ybasisi in range(j-q,j+1): 
                     px = xi
                     py = eta
-                    fi = 2-(px**2 + py**2)
+                    fi = -loadfun(px,py)
                     Ni = B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
                     F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni*Jacobi)
     return K,F
@@ -148,7 +148,7 @@ def assembly(K,F,Ke,Fe,elemx,elemy,p,q, xDivision, yDivision):
     for idxx in range(p+1):
         for idxy in range(q+1):
             idxs.append((elemx-p)*(xDivision+p+1)+(elemy-q) +idxx*(xDivision+p+1)+idxy)
-    print("idxs:",idxs)
+    #print("idxs:",idxs)
     for idxx,i in enumerate(idxs):
         for idxy,j in enumerate(idxs):
             K[i,j] += Ke[idxx,idxy]
@@ -181,7 +181,7 @@ def solve(K,F,dirichlet):
     filtered_F = F[mask].reshape(k - len(dirichlet))
     
     u = np.dot(np.linalg.inv(filtered_K),filtered_F)
-    print("\nU:\n",u)
+    #print("\nU:\n",u)
     u_orig = u
     for i in dirichlet:
         u_orig = np.insert(u_orig,i,0)
@@ -222,7 +222,7 @@ def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvecto
     #ax.scatter(x,y,z,c="r",marker="*")
     #plt.axis('equal')
     plt.show()
-def visualizeResultsBspline(results,p,q,knotvector_x, knotvector_y):
+def visualizeResultsBspline(results,p,q,knotvector_x, knotvector_y,solfun):
     xPoints = []
     yPoints = []
     result = []
@@ -234,7 +234,7 @@ def visualizeResultsBspline(results,p,q,knotvector_x, knotvector_y):
             sum = 0
             xPoints.append(xx)
             yPoints.append(yy)
-            analitical.append(0.5*(xx**2-1)*(yy**2-1))
+            analitical.append(solfun(xx,yy))
             for xbasis in range(len(knotvector_x)-p-1):
                 for ybasis in range(len(knotvector_y)-q-1):
                     sum += B(xx,p,xbasis,knotvector_x)*B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
@@ -267,7 +267,7 @@ def calculateError(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_
         print(f"MSE: {MSE}")
 
     return(MSE)
-def calculateErrorBspline(surface, ctrlpts, results,k,l,weigths,knotvector_u,knotvector_w,p,q):
+def calculateErrorBspline(surface, ctrlpts, results,k,l,weigths,knotvector_u,knotvector_w,p,q,solfun):
     xPoints = []
     yPoints = []
     result = []
@@ -279,7 +279,7 @@ def calculateErrorBspline(surface, ctrlpts, results,k,l,weigths,knotvector_u,kno
             sum = 0
             xPoints.append(xx)
             yPoints.append(yy)
-            analitical.append(0.5*(xx**2-1)*(yy**2-1))
+            analitical.append(solfun(xx,yy))
             for xbasis in range(len(knotvector_u)-p-1):
                 for ybasis in range(len(knotvector_w)-q-1):
                     sum += B(xx,p,xbasis,knotvector_u)*B(yy,q,ybasis,knotvector_w)*results[(len(knotvector_u)-p-1)*xbasis+ybasis]

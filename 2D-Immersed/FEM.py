@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mesh
 import math
-FUNCTION_CASE = 2
+FUNCTION_CASE = 1
 MAX_SUBDIVISION = 2
 def load_function(x,y):
     #! -f(x)
@@ -13,11 +13,22 @@ def load_function(x,y):
     elif FUNCTION_CASE == 2:
         arg = (x**2 + y**2)*math.pi/2
         return -(-2*math.pi*math.sin(arg)-math.cos(arg)*(x**2 + y**2)*math.pi**2)
+    elif FUNCTION_CASE == 3:
+        return -8*x
 def solution_function(x,y):
     if FUNCTION_CASE == 1:
         return x*(x**2 + y**2 -1)
     elif FUNCTION_CASE == 2:
         return math.cos((x**2 + y**2)*math.pi/2)
+    elif FUNCTION_CASE == 3:
+        return x*(x**2 + y**2 -1) + 2
+def dirichletBoundary(x,y):
+    if FUNCTION_CASE == 1:
+        return 2
+    if FUNCTION_CASE == 2:
+        return 0
+    if FUNCTION_CASE == 3:
+        return 2
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x*15))
 def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
@@ -181,8 +192,11 @@ def GaussQuadrature(x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
             for xbasisi in range(i-p,i+1):
                 for ybasisi in range(j-q,j+1): 
                     fi = load_function(xi, eta)
+                    dNidxi = dBdXi(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
+                    dNidEta = B(xi, p, xbasisi,knotvector_x)*dBdXi(eta,q,ybasisi,knotvector_y)
+                    
                     Ni = d*B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += (w[idxx]*w[idxy]*(fi*Ni*Jacobi))
+                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += (w[idxx]*w[idxy]*(fi*Ni*Jacobi + dirichletBoundary(xi,eta)*(dNidxi*mesh.dddx(xi,eta) + dNidEta*mesh.dddy(xi,eta))))
     return K,F
 def elementChoose(Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
     assert not Nurbs_fun
@@ -308,6 +322,7 @@ def visualizeResultsBspline(results,p,q,knotvector_x, knotvector_y,surfacepoints
                 for ybasis in range(len(knotvector_y)-q-1):
                     sum += B(xx,p,xbasis,knotvector_x)*B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
             sum = d*sum
+            sum += (1-d)*dirichletBoundary(xx,yy)
             if d<0: sum = 0
             result.append(sum)
     fig, ax = plt.subplots(subplot_kw={"projection":"3d"})

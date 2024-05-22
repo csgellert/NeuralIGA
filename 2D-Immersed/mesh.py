@@ -94,6 +94,26 @@ def plotDisctancefunction():
     plt.title('Scalar-Valued Function f(x, y)')
     plt.grid(True)
     plt.show()
+def plotAlayticHeatmap(solfun,n=10):
+    x_values = np.linspace(-1.1, 1.1, 1000)
+    y_values = np.linspace(-1.1, 1.1, 1000)
+    X, Y = np.meshgrid(x_values, y_values)
+    Z = np.zeros((1000,1000))
+    # Evaluate the function at each point in the grid
+    for idxx, xx in enumerate(x_values):
+        for idxy,yy in enumerate(y_values):
+            Z[idxy, idxx] = solfun(xx,yy)
+
+    #Z = distanceFromContur(X, Y)
+
+    # Create a contour plot
+    plt.contourf(X, Y, Z,levels=100)
+    plt.colorbar(label='u(x,y)')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.title('A modellprobléma megoldása')
+    plt.grid(False)
+    plt.show()
 if __name__ == "__main__":
     plotDisctancefunction()
     plotMesh(1,1,0.1)

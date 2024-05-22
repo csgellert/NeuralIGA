@@ -11,7 +11,7 @@ def solutionfunction(x,y):
     return cos(pi*x/2)*cos(pi*y/2)
 Nurbs_basis = False
 #defining geometry:
-default = getDefaultValues(div=1,order=1)
+default = getDefaultValues(div=4,order=2)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = generateRectangularMesh(*default)
 assert p==q and xDivision == yDivision
@@ -48,6 +48,7 @@ print(dirichlet)
 result = FEM.solve(K,F,dirichlet)
 #NURBS.plotNURBSbasisFunction(NControl_u,NControl_w,2,1,weigths,knotvector_u,knotvector_w,p,q,NURBS.R2)
 #FEM.visualizeResults_new(ctrlpts,result,NControl_u,NControl_w,weigths,knotvector_u,knotvector_w,p,q)
+FEM.plotAlayticHeatmap(solutionfunction)
 if Nurbs_basis:
     FEM.visualizeResults(Surfacepoints, ctrlpts, result,NControl_u,NControl_w,weigths,knotvector_u,knotvector_w,p,q)
 else:

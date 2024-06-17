@@ -16,8 +16,8 @@ uBe = 0
 l = xBe-xAe # length of the domain
 
 #Number of points
-N = 50
-p = 1 
+N = 6
+p = 3 
 
 # defining the domain 
 knots = np.linspace(xA, xB, N)
@@ -40,7 +40,7 @@ print(F)
 u = FEM.solve(F,K)
 analitical = [(-sin(xv) + ((1/xBe)*(sin(xBe)-10))*xv +10)/10 for xv in x]
 print("Mean Absolute Error:",np.mean(np.abs(FEM.evaluate(u,knots,p,x)[:-1]-analitical[:-1])))
-FEM.show(u,knots,p,x, analitical,plotbasis=True)
+FEM.show(u,knots,p,x, analitical=None,plotbasis=False)
 
 
 

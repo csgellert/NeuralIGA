@@ -101,15 +101,15 @@ if __name__ == "__main__":
    
    import numpy as np
    fig, ax = plt.subplots()
-   xx = np.linspace(1.5, 4.5, 500)
-   xx2 = np.linspace(1, 4, 500)
-   t = [1,1,1, 2, 3, 4,4,4]
+   #xx = np.linspace(1.5, 4.5, 500)
+   xx2 = np.linspace(1, 8, 500)
+   t = [1,2,3,4,5,6,7,8]
    #t2 = [4,0, 1, 2, 3, 4, 5, 6,6]
    c = [1,1,1,1,1,1,1,1,1,1,1,1]
    #ax.plot(xx, [bspline(x, t, c ,k) for x in xx], 'r-', lw=3, label='naive')
-   ax.plot(xx2, [bspline(x, t, c ,k) for x in xx2], 'g-', lw=3, label='naive')
+   #ax.plot(xx2, [bspline(x, t, c ,k) for x in xx2], 'g-', lw=3, label='naive')
    #ax.plot(xx, spl(xx), 'b-', lw=4, alpha=0.7, label='BSpline')
-   ax.grid(True)
+   #ax.grid(True)
    ax.legend(loc='best')
 
    for i in range(len(t)-k-1):
@@ -119,7 +119,7 @@ if __name__ == "__main__":
       #diff = [(Ni2[idx]-Ni2[idx-1])/(xx2[1]-xx2[0]) for idx,x in enumerate(Ni2)]
       #ax.plot(xx, Ni)2
       ax.plot(xx2, Ni2)
-      ax.plot(xx2, [dBdXi(x,k,i,t) for x in xx2],"g--")
+      #ax.plot(xx2, [dBdXi(x,k,i,t) for x in xx2],"g--")
       ax.plot(t,[0 for _ in t],"r*")
       #ax.plot(xx2[1:], diff[1:])
    plt.show()

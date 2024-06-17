@@ -119,10 +119,10 @@ def show(u,t,p,xx,analitical = None, plotbasis=False):
         sum +=Ni
     #sum = np.zeros(xx.shape)
     sum+=[u_star(x) for x in xx]
-    #plt.plot(xx,[u_star(x) for x in xx])
+    plt.plot(xx,[u_star(x) for x in xx])
     #analitical= np.array(analitical)-[u_star(x) for x in xx]
     plt.plot(xx,sum)
     if analitical is not None:
         plt.plot(xx,analitical)
-    if not plotbasis: plt.legend(["Numerical","Analitical"])
+    if not plotbasis: plt.legend(["u*","u"])
     plt.show()

@@ -4,6 +4,7 @@ from math import sqrt
 import matplotlib.pyplot as plt
 
 EPS = 0.9
+USE_SIGMOID_FOR_DISTANCE = False
 
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     assert x0 < x1 and y0 < y1
@@ -36,32 +37,25 @@ def getDefaultValues(div=2,order=1,delta = 0):
     xDivision = div
     yDivision = div
     return x0, y0,x1,y1,xDivision,yDivision,p,q
-def distanceFromContur(x,y):
+def distanceFromContur(x,y,addsigmoid = USE_SIGMOID_FOR_DISTANCE):
     #Circle like domain
     R2 = 1
     r = x**2 + y**2
     d = R2-r
-    #d = 1 if abs(R2-sqrt(r)) > EPS else (R2-sqrt(r))/EPS
-    #if r>R2*R2: d = -1 
+    if addsigmoid: return sigmoid(d)
     return d
-def dddx(x,y):
+def dddx(x,y,addsigmoid = USE_SIGMOID_FOR_DISTANCE):
     dx = -2*x
-    """
-    r2 = x*x + y*y
-    r = sqrt(r2)
-    dx = 0 if abs(r-1) > EPS else x*sqrt(EPS/(r2))
-    if r > 1: dx = 0"""
-
+    if addsigmoid: return dx*sigmoid_derivative(distanceFromContur(x,y))
     return dx
-def dddy(x,y):
+def dddy(x,y, addsigmoid = USE_SIGMOID_FOR_DISTANCE):
     dy = -2*y
-    """
-    r2 = x*x + y*y
-    r = sqrt(r2)
-    dy = 0 if abs(r-1) > EPS else y*sqrt(EPS/(r2))
-    if r > 1: dy = 0"""
-
+    if addsigmoid: return dy*sigmoid_derivative(distanceFromContur(x,y))
     return dy
+def sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-x))
+def sigmoid_derivative(x):
+    return sigmoid(x)*(1-sigmoid(x))
 def plotMesh(xdiv=2, ydiv=3,delta=0):
     circle = plt.Circle((0, 0), 1, color='r')
     fig, ax = plt.subplots()

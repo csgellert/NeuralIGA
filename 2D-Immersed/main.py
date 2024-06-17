@@ -17,7 +17,7 @@ y = np.linspace(y0,y1,10)
 NControl_u = len(knotvector_u)-p-1
 NControl_w = len(knotvector_w)-q-1
 mesh.plotMesh(xDivision,yDivision,delta=0.05)
-mesh.plotAlayticHeatmap(FEM.solution_function)
+#mesh.plotAlayticHeatmap(FEM.solution_function)
 Surfacepoints = []
 if Nurbs_basis:
     for xx in x:

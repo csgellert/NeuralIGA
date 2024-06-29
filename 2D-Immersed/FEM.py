@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mesh
 import math
-FUNCTION_CASE = 3
+FUNCTION_CASE = 4
 MAX_SUBDIVISION = 2
 def load_function(x,y):
     #! -f(x)
@@ -15,6 +15,10 @@ def load_function(x,y):
         return -(-2*math.pi*math.sin(arg)-math.cos(arg)*(x**2 + y**2)*math.pi**2)
     elif FUNCTION_CASE == 3:
         return -8*x
+    elif FUNCTION_CASE == 4:
+        return -8*x
+    else:
+        raise NotImplementedError
 def solution_function(x,y):
     if FUNCTION_CASE == 1:
         return x*(x**2 + y**2 -1)
@@ -22,6 +26,9 @@ def solution_function(x,y):
         return math.cos((x**2 + y**2)*math.pi/2)
     elif FUNCTION_CASE == 3:
         return x*(x**2 + y**2 -1) + 2
+    elif FUNCTION_CASE == 4:
+        return x*(x**2 + y**2 -1) + x +2*y
+    else: raise NotImplementedError
 def dirichletBoundary(x,y):
     if FUNCTION_CASE == 1:
         return 2
@@ -29,6 +36,21 @@ def dirichletBoundary(x,y):
         return 0
     if FUNCTION_CASE == 3:
         return 2
+    if FUNCTION_CASE == 4:
+        return x+2*y
+    else: raise NotImplementedError
+def dirichletBoundaryDerivativeX(x,y):
+    if FUNCTION_CASE <= 3:
+        return 0
+    elif FUNCTION_CASE == 4:
+        return 1
+    else: raise NotImplementedError
+def dirichletBoundaryDerivativeY(x,y):
+    if FUNCTION_CASE <= 3:
+        return 0
+    elif FUNCTION_CASE == 4:
+        return 2
+    else: raise NotImplementedError
 def element(p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
     """
     p - order in x direction
@@ -196,7 +218,7 @@ def GaussQuadrature(x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
                     diCorrXi = dNidxi*d + mesh.dddx(xi,eta) * B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
                     diCorrEta = dNidEta*d + mesh.dddy(xi,eta) * B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
                     
-                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += (w[idxx]*w[idxy]*(fi*Ni*Jacobi + dirichletBoundary(xi,eta)*(diCorrXi*mesh.dddx(xi,eta) + diCorrEta*mesh.dddy(xi,eta))))
+                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni*Jacobi + (diCorrXi*(mesh.dddx(xi,eta)*dirichletBoundary(xi,eta)+d*dirichletBoundaryDerivativeX(xi,eta)) + diCorrEta*(mesh.dddy(xi,eta)*dirichletBoundary(xi,eta)+d*dirichletBoundaryDerivativeY(xi,eta))) - (dirichletBoundaryDerivativeX(xi,eta)*diCorrXi + dirichletBoundaryDerivativeY(xi,eta)*diCorrEta))
     return K,F
 def elementChoose(Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
     assert not Nurbs_fun

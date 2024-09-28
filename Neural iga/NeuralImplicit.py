@@ -65,7 +65,7 @@ def generate_data(num_samples,fun_num = 0):
     
     
 
-def plotDisctancefunction(eval_fun, N=500):
+def plotDisctancefunction(eval_fun, N=500,contour = False):
     x_values = np.linspace(-1.1, 1.1, N)
     y_values = np.linspace(-1.1, 1.1, N)
     X, Y = np.meshgrid(x_values, y_values)
@@ -84,7 +84,10 @@ def plotDisctancefunction(eval_fun, N=500):
     #Z = distanceFromContur(X, Y)
 
     # Create a contour plot
-    plt.contourf(X, Y, Z,levels=20)
+    if contour:
+         plt.contour(X, Y, Z,levels=20)
+    else:
+        plt.contourf(X, Y, Z,levels=20)
     plt.colorbar(label='f(x, y)')
     plt.xlabel('x')
     plt.ylabel('y')

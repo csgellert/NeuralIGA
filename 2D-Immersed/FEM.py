@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mesh
 import math
-FUNCTION_CASE = 2
+FUNCTION_CASE = 3
 MAX_SUBDIVISION = 2
 def load_function(x,y):
     #! -f(x)

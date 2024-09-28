@@ -248,8 +248,6 @@ def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nCont
     else:
         Ke, Fe = boundaryElementBspline(model,r,p,q,knotvector_x, knotvector_y,i,j,nControlx, nControly)
     return Ke, Fe
-def alma(x):
-    print(x)
 
 def assembly(K,F,Ke,Fe,elemx,elemy,p,q, xDivision, yDivision):
     l = len(Fe)

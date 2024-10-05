@@ -397,25 +397,29 @@ def calculateError(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_
     MSE = (np.square(np.array(zRes)-np.array(zPoints))).mean()
     #print(f"MSE: {MSE}")
     return(MSE)
-def calculateErrorBspline(surface, ctrlpts, results,k,l,weigths,knotvector_u,knotvector_w,p,q):
+def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y):
     xPoints = []
     yPoints = []
     result = []
     analitical = []
-    x = np.linspace(0,1,10)
-    y = np.linspace(0,1,10)
-    print("D is not implemented")
+    x = np.linspace(-1,1,20)
+    y = np.linspace(-1,1,20)
     for xx in x:
         for yy in y:
             sum = 0
             xPoints.append(xx)
             yPoints.append(yy)
-            analitical.append(0.5*(xx**2-1)*(yy**2-1))
-            for xbasis in range(len(knotvector_u)-p-1):
-                for ybasis in range(len(knotvector_w)-q-1):
-                    sum += B(xx,p,xbasis,knotvector_u)*B(yy,q,ybasis,knotvector_w)*results[(len(knotvector_u)-p-1)*xbasis+ybasis]
+            d = mesh.distanceFromContur(xx,yy,model).detach().numpy()
+            analitical.append(solution_function(xx,yy) if d>=0 else 0)
+            
+            for xbasis in range(len(knotvector_x)-p-1):
+                for ybasis in range(len(knotvector_y)-q-1):
+                    sum += B(xx,p,xbasis,knotvector_x)*B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
+            sum = d*sum
+            #sum = 0
+            sum += (1-d)*dirichletBoundary(xx,yy)
+            if d<0: sum = 0
             result.append(sum)
-    
     MSE = (np.square(np.array(result)-np.array(analitical))).mean()
     print(f"MSE: {MSE}")
     return MSE

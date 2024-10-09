@@ -19,9 +19,9 @@ relu_model.load_state_dict(torch.load('relu_model_last.pth',weights_only=True))
 relu_model.eval()
 r=1
 
-test_values = [3,5,7,9]
+test_values = [3,5,7]#,9,13,15]
 esize = [1/(nd+1) for nd in test_values]
-orders = [1,2,3]
+orders = [3]
 fig,ax = plt.subplots()
 for order in orders:
     accuracy = []

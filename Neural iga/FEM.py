@@ -51,58 +51,7 @@ def dirichletBoundaryDerivativeY(x,y):
     elif FUNCTION_CASE == 4:
         return 2
     else: raise NotImplementedError
-def element(model,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
-    raise ValueError
-    """
-    p - order in x direction
-    q - order in y direction
-    knotvector_x - knotvector in x direction
-    knotvector_y - knotvector in y direction
-    ed - TODO
-    i: ith element in x direction
-    j: jth element in y direction
-    """
-    assert q==p
-    #* Defining Gauss points
-    g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
-    w = np.array([1,1])
-    x1 = knotvector_x[i]
-    x2 = knotvector_x[i+1]
-    y1 = knotvector_y[j]
-    y2 = knotvector_y[j+1]
-    K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
-    F = np.zeros((p+1)*(q+1))
-    for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
-        for idxy,gpy in enumerate(g): #iterate throug Gauss points functions in y direction
-            xi = (x2-x1)/2 * gpx + (x2+x1)/2
-            eta = (y2-y1)/2 * gpy + (y2+y1)/2
-            Jxi = (x2-x1)/2
-            Jeta = (y2-y1)/2
-            Jacobi = Jxi*Jeta
-            Jxi=1
-            Jeta=1
-            #Jacobi = 1/Jacobi
-            #*CAlculating the Ke
-            for xbasisi in range(i-p,i+1):
-                for ybasisi in range(j-q,j+1): 
-                    for xbasisj in range(i-p,i+1):
-                        for ybasisj in range(j-q,j+1): 
-                            #f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                            dNidxi = dR2dXi(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                            dNidEta = dR2dEta(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                            dNjdxi = dR2dXi(nControlx,nControly,xbasisj,ybasisj,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                            dNjdeta = dR2dEta(nControlx,nControly,xbasisj,ybasisj,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                            
-                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += w[idxx]*w[idxy]*(((dNidxi/Jxi)*(dNjdxi/Jxi) + (dNidEta/Jeta)*(dNjdeta/Jeta) )*Jacobi)
-            #* Calculating the Fe vector
-            for xbasisi in range(i-p,i+1):
-                for ybasisi in range(j-q,j+1): 
-                    px = Surface(nControlx,nControly,xi,eta,weigths,knotvector_x,knotvector_y,p,q,ctrlpts)[0]#xi#knotvector_x[i+xbasisi-i+1]
-                    py = Surface(nControlx,nControly,xi,eta,weigths,knotvector_x,knotvector_y,p,q,ctrlpts)[1]#eta#knotvector_y[j+ybasisi-j+1]
-                    fi = 2-(px**2 + py**2)
-                    Ni = R2(nControlx,nControly,xbasisi,ybasisi,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni*Jacobi)
-    return K,F
+
 def elemantBspline(model,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
     assert q==p
     SUBDIVISION = 1
@@ -261,23 +210,7 @@ def assembly(K,F,Ke,Fe,elemx,elemy,p,q, xDivision, yDivision):
     for idx, i in enumerate(idxs):
         F[i] += Fe[idx]
     return K,F
-def solve(K,F,dirichlet):
-    k = len(F)
-    mask = np.ones((k, k), dtype=bool)
-    for i in dirichlet:
-        mask[i,:] = False
-        mask[:,i] = False
 
-    filtered_K = K[mask].reshape(k - len(dirichlet), k - len(dirichlet))
-    mask = np.ones(k, dtype=bool)
-    mask[np.ix_(dirichlet)] = False
-    filtered_F = F[mask].reshape(k - len(dirichlet))
-    
-    u = np.dot(np.linalg.inv(filtered_K),filtered_F)
-    u_orig = u
-    for i in dirichlet:
-        u_orig = np.insert(u_orig,i,0)
-    return u_orig
 def solveWeak(K,F):
     zero_rows = np.all(K == 0, axis=1)
     zero_cols = np.all(K == 0, axis=0)
@@ -294,38 +227,7 @@ def solveWeak(K,F):
     u_reduced = np.dot(inv,F_reduced)
     u[~zero_f] = u_reduced
     return u
-def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_w,p,q,calc_error = True):
-    
-    fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
-    xPoints = []
-    yPoints = []
-    zPoints = []
-    zRes = []
-    for surfpoint in surface:
-        for koordinate in surfpoint:
-            xPoints.append(koordinate[0])  
-            yPoints.append(koordinate[1])  
-            res  = 0
-            for i in range(0,k):
-                for j in range(0,l):
-                    res += result[k*i+j]*R2(k,l,i,j,koordinate[0],koordinate[1],weigths,knotvector_u,knotvector_w,p,q)
-            zPoints.append(res) 
-            zRes.append( 0.5*(koordinate[0]**2-1)*(koordinate[1]**2-1))
-    ax.scatter(xPoints,yPoints,zPoints)#, edgecolors='face')
-    ax.scatter(xPoints,yPoints,zRes)
-    if calc_error:
-        MSE = (np.square(np.array(zRes)-np.array(zPoints))).mean()
-        print(f"MSE: {MSE}")
-    #plot controlpoints:
-    x=[]
-    y=[]
-    z=[]
-    for j in ctrlpts:
-        for i in j:
-            x.append(i[0])
-            y.append(i[1])
-            z.append(i[2])
-    plt.show()
+
 def visualizeResultsBspline(model,results,p,q,knotvector_x, knotvector_y,surfacepoints=None):
     xPoints = []
     yPoints = []
@@ -381,22 +283,6 @@ def plotDistanceField():
     fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
     ax.scatter(xPoints,yPoints,result)#, edgecolors='face')
     plt.show()
-def calculateError(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_w,p,q):
-    zPoints = []
-    zRes = []
-    #result.append([0,0,0,0])
-    #plotBsplineBasis(np.linspace(0,1,100), knotvector_u,p)
-    for surfpoint in surface:
-        for koordinate in surfpoint:
-            res  = 0
-            for i in range(0,k):
-                for j in range(0,l):
-                    res += result[k*i+j]*R2(k,l,i,j,koordinate[0],koordinate[1],weigths,knotvector_u,knotvector_w,p,q)
-            zPoints.append(res) 
-            zRes.append( 0.5*(koordinate[0]**2-1)*(koordinate[1]**2-1))
-    MSE = (np.square(np.array(zRes)-np.array(zPoints))).mean()
-    #print(f"MSE: {MSE}")
-    return(MSE)
 def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y):
     xPoints = []
     yPoints = []
@@ -424,15 +310,6 @@ def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y):
     print(f"MSE: {MSE}")
     return MSE
 
-
-def svd_inverse(A):
-    U, s, V = np.linalg.svd(A)
-    s_rec = [1/i if i>1e-5 else 0 for i in s]
-    #s[s < 1e-9] = 0
-    A_inv = np.dot(V.T, np.dot(np.diag(s_rec), U.T))
-    return A_inv
-def regularized_inverse(A, lambda_val=1e-5):
-    return np.linalg.inv(A + lambda_val * np.eye(A.shape[0]))
 #* TEST
 if __name__ == "__main__":
     print("2D - Immersed - FEM.py")

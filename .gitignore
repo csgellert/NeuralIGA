@@ -2,7 +2,11 @@
 .vscode
 #neural network models
 *.pth
-
+#generated_picures
+*.png
+#profiling staff
+profiling_stats.txt
+*.prof_stats
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

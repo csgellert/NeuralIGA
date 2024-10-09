@@ -34,7 +34,12 @@ def dBdXi(x, k, i, t):
    else:
       c2 = k/(t[i+k+1] - t[i+1]) * B(x, k-1, i+1, t)
    return c1 - c2
-
+def cubicBspline(x, k, i, t):
+   coeff = np.array([[-1,3,-3,1],[3, -6,3, 0],[-3,0,3,0],[1,4,1,0]])
+   f = 1/6
+   t = [x*x*x,x*x,x,1]
+   return f*np.dot(np.dot(t,coeff),t)
+   #!Wrong
 def bspline(x, t, c, k):
    # x = xi
    # t = knot vector

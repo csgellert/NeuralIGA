@@ -38,7 +38,7 @@ class NeuralNetwork(nn.Module):
 
 
             if not step % steps_til_summary:
-                print("Step %d, Total loss %0.6f" % (step, loss))
+                print("Step %d, Total loss %0.8f" % (step, loss))
 
             optim.zero_grad()
             loss.backward()
@@ -77,9 +77,9 @@ def plotDisctancefunction(eval_fun, N=500,contour = False):
             try:
                 crd = torch.tensor([xx, yy], dtype=torch.float32)
                 ans = eval_fun(crd)
-                Z[idxy, idxx] = ans[0].item()
+                Z[idxx, idxy] = ans[0].item()
             except:
-                Z[idxy, idxx] = eval_fun([xx,yy])
+                Z[idxx, idxy] = eval_fun([xx,yy])
 
     #Z = distanceFromContur(X, Y)
 

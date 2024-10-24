@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import math
 def B(x, k, i, t, finish_end=True): #uniform B-spline Basis Functions
    # x = xi
    # k = grade
@@ -67,3 +68,10 @@ def plotBsplineBasis(x, t, k,derivative = False, sum = False):
    if sum:
       ax.plot(x,summ,'c-')
    plt.show()
+
+if __name__ == "__main__":
+   #print("2D - Immersed - FEM.py")
+   x=np.linspace(-1,1,100)
+   knt = [-1,-1,-1,-1,0,1,1,1,1]
+   p=3
+   plotBsplineBasis(x,knt,p)

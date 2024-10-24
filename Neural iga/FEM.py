@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import mesh
 import math
 FUNCTION_CASE = 2
-MAX_SUBDIVISION = 2
+MAX_SUBDIVISION = 3
 def load_function(x,y):
     #! -f(x)
     if FUNCTION_CASE == 1:
@@ -143,33 +143,27 @@ def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
             #*CAlculating the Ke
             for xbasisi in range(i-p,i+1):
                 for ybasisi in range(j-q,j+1): 
+                    dNidxi = dBdXi(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
+                    dNidEta = B(xi, p, xbasisi,knotvector_x)*dBdXi(eta,q,ybasisi,knotvector_y)
+                    Ni = B(eta,q,ybasisi,knotvector_y)*B(xi,p,xbasisi,knotvector_x)
+                    diCorrXi = dNidxi*d + dx * Ni
+                    diCorrEta = dNidEta*d + dy * Ni
                     for xbasisj in range(i-p,i+1):
                         for ybasisj in range(j-q,j+1): 
                             #f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                            dNidxi = dBdXi(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                            dNidEta = B(xi, p, xbasisi,knotvector_x)*dBdXi(eta,q,ybasisi,knotvector_y)
                             dNjdxi = dBdXi(xi,p,xbasisj,knotvector_x)*B(eta,q,ybasisj,knotvector_y)
                             dNjdeta = B(xi,p,xbasisj,knotvector_x)*dBdXi(eta,q,ybasisj,knotvector_y)
-                            
-                            Ni = B(eta,q,ybasisi,knotvector_y)*B(xi,p,xbasisi,knotvector_x)
                             Nj = B(eta,q,ybasisj,knotvector_y)*B(xi,p,xbasisj,knotvector_x)
                             #correction with the distance function
-                            diCorrXi = dNidxi*d + dx * Ni
-                            diCorrEta = dNidEta*d + dy * Ni
                             djCorrXi = dNjdxi*d + dx * Nj
                             djCorrEta = dNjdeta*d + dy * Nj
                             K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += w[idxx]*w[idxy]*(((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta))*Jacobi)
-            #* Calculating the Fe vector
-            for xbasisi in range(i-p,i+1):
-                for ybasisi in range(j-q,j+1): 
                     fi = load_function(xi, eta)
-                    Ni = d*B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                    dNidxi = dBdXi(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                    dNidEta = B(xi, p, xbasisi,knotvector_x)*dBdXi(eta,q,ybasisi,knotvector_y)
-                    diCorrXi = dNidxi*d + dx * B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                    diCorrEta = dNidEta*d + dy * B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                    
-                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni*Jacobi + (diCorrXi*(dx*dirichletBoundary(xi,eta)+d*dirichletBoundaryDerivativeX(xi,eta)) + diCorrEta*(dy*dirichletBoundary(xi,eta)+d*dirichletBoundaryDerivativeY(xi,eta))) - (dirichletBoundaryDerivativeX(xi,eta)*diCorrXi + dirichletBoundaryDerivativeY(xi,eta)*diCorrEta))
+                    Ni_corr = d*Ni
+                    dirichlet_xi_eta = dirichletBoundary(xi,eta)
+                    Ddirichlet_X = dirichletBoundaryDerivativeX(xi,eta)
+                    Ddirichlet_Y = dirichletBoundaryDerivativeY(xi,eta)
+                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni_corr*Jacobi + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))
     return K,F
 def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
     assert not Nurbs_fun

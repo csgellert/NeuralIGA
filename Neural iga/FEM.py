@@ -4,8 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mesh
 import math
+import torch
 FUNCTION_CASE = 2
-MAX_SUBDIVISION = 3
+MAX_SUBDIVISION = 4
 def load_function(x,y):
     #! -f(x)
     if FUNCTION_CASE == 1:
@@ -52,7 +53,7 @@ def dirichletBoundaryDerivativeY(x,y):
         return 2
     else: raise NotImplementedError
 
-def elemantBspline(model,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
+def elemantBspline(model,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts,Bspxi,Bspeta):
     assert q==p
     SUBDIVISION = 1
     DOSUBDIV = True
@@ -67,9 +68,9 @@ def elemantBspline(model,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nCont
     F = np.zeros((p+1)*(q+1))
     #doing subdivision
     if DOSUBDIV:
-        K,F = Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,level=0,MAXLEVEL=0)
+        K,F = Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,level=0,MAXLEVEL=0)
     return K,F
-def boundaryElementBspline(model,r,p,q,knotvector_x, knotvector_y,i,j,nControlx, nControly):
+def boundaryElementBspline(model,r,p,q,knotvector_x, knotvector_y,i,j,nControlx, nControly,Bspxi,Bspeta):
     assert q==p
     SUBDIVISION = 1
     DOSUBDIV = True
@@ -84,9 +85,9 @@ def boundaryElementBspline(model,r,p,q,knotvector_x, knotvector_y,i,j,nControlx,
     F = np.zeros((p+1)*(q+1))
     #doing subdivision
     if DOSUBDIV:
-        K,F = Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,level=0,MAXLEVEL=MAX_SUBDIVISION)
+        K,F = Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,level=0,MAXLEVEL=MAX_SUBDIVISION)
     return K,F
-def Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,level,MAXLEVEL=2):
+def Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,level,MAXLEVEL=2):
     halfx = (x1+x2)/2
     halfy = (y1+y2)/2
     K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
@@ -94,37 +95,37 @@ def Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,level,MAXLEVEL
     r=1 #! Ez hardcodolva van!!!
     if level == MAXLEVEL:
         #first
-        Ks,Fs = GaussQuadrature(model,x1, halfx,y1,halfy,r,i,j,p,q,knotvector_x,knotvector_y)
+        Ks,Fs = GaussQuadrature(model,x1, halfx,y1,halfy,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta)
         K+=Ks/4
         F+=Fs/4
         #second
-        Ks,Fs = GaussQuadrature(model,halfx, x2,y1,halfy,r,i,j,p,q,knotvector_x,knotvector_y)
+        Ks,Fs = GaussQuadrature(model,halfx, x2,y1,halfy,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta)
         K+=Ks/4
         F+=Fs/4
         #third
-        Ks,Fs = GaussQuadrature(model,x1, halfx,halfy,y2,r,i,j,p,q,knotvector_x,knotvector_y)
+        Ks,Fs = GaussQuadrature(model,x1, halfx,halfy,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta)
         K+=Ks/4
         F+=Fs/4
         #fourth
-        Ks,Fs = GaussQuadrature(model,halfx, x2,halfy,y2,r,i,j,p,q,knotvector_x,knotvector_y)
+        Ks,Fs = GaussQuadrature(model,halfx, x2,halfy,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta)
         K+=Ks/4
         F+=Fs/4
         return K,F
     else:
-        Kret,Fret=Subdivide(model,x1,halfx,y1,halfy,i,j,knotvector_x,knotvector_y,p,q,level+1,MAXLEVEL)
+        Kret,Fret=Subdivide(model,x1,halfx,y1,halfy,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,level+1,MAXLEVEL)
         K+= Kret/4
         F+=Fret/4
-        Kret,Fret=Subdivide(model,x1,halfx,halfy,y2,i,j,knotvector_x,knotvector_y,p,q,level+1,MAXLEVEL)
+        Kret,Fret=Subdivide(model,x1,halfx,halfy,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,level+1,MAXLEVEL)
         K+= Kret/4
         F+=Fret/4
-        Kret,Fret=Subdivide(model,halfx,x2,y1,halfy,i,j,knotvector_x,knotvector_y,p,q,level+1,MAXLEVEL)
+        Kret,Fret=Subdivide(model,halfx,x2,y1,halfy,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,level+1,MAXLEVEL)
         K+= Kret/4
         F+=Fret/4
-        Kret,Fret=Subdivide(model,halfx,x2,halfy,y2,i,j,knotvector_x,knotvector_y,p,q,level+1,MAXLEVEL)
+        Kret,Fret=Subdivide(model,halfx,x2,halfy,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,level+1,MAXLEVEL)
         K+= Kret/4
         F+=Fret/4
         return K,F
-def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
+def GaussQuadrature_old(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
     g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
     w = np.array([1,1])
     K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
@@ -136,10 +137,6 @@ def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
             #d = mesh.distanceFromContur(xi,eta,model)
             d,dx,dy = mesh.distance_with_derivative(xi,eta,model)
             if d<0: continue
-            Jxi = (x2-x1)/2
-            Jeta = (y2-y1)/2
-            Jacobi = Jxi*Jeta
-            Jacobi = 1
             #*CAlculating the Ke
             for xbasisi in range(i-p,i+1):
                 for ybasisi in range(j-q,j+1): 
@@ -157,14 +154,143 @@ def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
                             #correction with the distance function
                             djCorrXi = dNjdxi*d + dx * Nj
                             djCorrEta = dNjdeta*d + dy * Nj
-                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += w[idxx]*w[idxy]*(((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta))*Jacobi)
+                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += w[idxx]*w[idxy]*(((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta)))
                     fi = load_function(xi, eta)
                     Ni_corr = d*Ni
                     dirichlet_xi_eta = dirichletBoundary(xi,eta)
                     Ddirichlet_X = dirichletBoundaryDerivativeX(xi,eta)
                     Ddirichlet_Y = dirichletBoundaryDerivativeY(xi,eta)
-                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni_corr*Jacobi + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))
+                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni_corr + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))
     return K,F
+from bspline import Bspline
+def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta):
+    
+    g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
+    w = np.array([1,1])
+    K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
+    F = np.zeros((p+1)*(q+1))
+    Bspxi = Bspline(knotvector_x,p)
+    Bspeta = Bspline(knotvector_y,q)
+
+    for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
+        for idxy,gpy in enumerate(g): #iterate throug Gauss points functions in y direction
+            xi = (x2-x1)/2 * gpx + (x2+x1)/2
+            eta = (y2-y1)/2 * gpy + (y2+y1)/2
+            #d = mesh.distanceFromContur(xi,eta,model)
+            d,dx,dy = mesh.distance_with_derivative(xi,eta,model)
+            if d<0: continue
+            bxi = Bspxi(xi)
+            beta = Bspeta(eta)
+            dbdxi = Bspxi.diff(1)(xi)
+            dbdeta = Bspeta.diff(1)(eta)
+            #*CAlculating the Ke
+            for xbasisi in range(i-p,i+1):
+                for ybasisi in range(j-q,j+1): 
+                    dNidxi = dbdxi[xbasisi]*beta[ybasisi]
+                    dNidEta = bxi[xbasisi]*dbdeta[ybasisi]
+                    Ni = beta[ybasisi]*bxi[xbasisi]
+                    diCorrXi = dNidxi*d + dx * Ni
+                    diCorrEta = dNidEta*d + dy * Ni
+                    for xbasisj in range(i-p,i+1):
+                        for ybasisj in range(j-q,j+1): 
+                            #f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
+                            dNjdxi = dbdxi[xbasisj]*beta[ybasisj]
+                            dNjdeta = bxi[xbasisj]*dbdeta[ybasisj]
+                            Nj = beta[ybasisj]*bxi[xbasisj]
+                            #correction with the distance function
+                            djCorrXi = dNjdxi*d + dx * Nj
+                            djCorrEta = dNjdeta*d + dy * Nj
+                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += w[idxx]*w[idxy]*(((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta)))
+                    fi = load_function(xi, eta)
+                    Ni_corr = d*Ni
+                    dirichlet_xi_eta = dirichletBoundary(xi,eta)
+                    Ddirichlet_X = dirichletBoundaryDerivativeX(xi,eta)
+                    Ddirichlet_Y = dirichletBoundaryDerivativeY(xi,eta)
+                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni_corr + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))
+    return K,F
+def GaussQuadrature_opt(model, x1, x2, y1, y2, r, i, j, p, q, knotvector_x, knotvector_y):
+    g = np.array([-1 / math.sqrt(3), 1 / math.sqrt(3)])  # Gauss points
+    w = np.array([1, 1])  # Weights
+    K = np.zeros(((p + 1) * (q + 1), (p + 1) * (q + 1)))
+    F = np.zeros((p + 1) * (q + 1))
+
+    # Calculate xi and eta for all combinations of Gauss points
+    gpx = (x2 - x1) / 2 * g[:, None] + (x2 + x1) / 2  # Shape: (2, 1)
+    gpy = (y2 - y1) / 2 * g + (y2 + y1) / 2  # Shape: (2,)
+
+    # Prepare for distance calculations
+    points = np.array(np.meshgrid(gpx.flatten(), gpy.flatten())).T.reshape(-1, 2)
+    
+    # Calculate distances and derivatives
+    d, dx, dy = mesh.distance_with_derivative(points[:, 0].T, points[:, 1].T, model)
+
+    # Reshape d, dx, dy to 2x2 for processing
+    d = d.reshape(2, 2)
+    dx = dx.reshape(2, 2)
+    dy = dy.reshape(2, 2)
+
+    # Mask for valid distances
+    valid_mask = d >= 0
+
+    # Calculate basis functions and their derivatives for valid points
+    xbasis_indices = np.arange(i - p, i + 1)
+    ybasis_indices = np.arange(j - q, j + 1)
+
+    # Vectorize B-spline calculations
+    N_x = np.array([[B(gpy[jj], q, ybasisi, knotvector_y) for jj in range(2)] for ybasisi in ybasis_indices])
+    N_y = np.array([[B(gpx[ii], p, xbasisi, knotvector_x) for ii in range(2)] for xbasisi in xbasis_indices])
+
+    for idxx in range(2):  # Loop through Gauss points in x direction
+        for idxy in range(2):  # Loop through Gauss points in y direction
+            if not valid_mask[idxx, idxy]:
+                continue  # Skip invalid points
+
+            xi, eta = gpx[idxx, 0], gpy[idxy]
+
+            # dNdxi and dNidEta
+            test = dBdXi(xi, p, xbasis_indices[:, None], knotvector_x)
+            dNidxi =  test* N_y[idxy]
+            dNidEta = N_x[idxx] * dBdXi(eta, q, ybasis_indices, knotvector_y)
+
+            Ni = N_x[idxx] * N_y[idxy]
+
+            # Calculate corrections
+            diCorrXi = dNidxi * d[idxx, idxy] + dx[idxx, idxy] * Ni
+            diCorrEta = dNidEta * d[idxx, idxy] + dy[idxx, idxy] * Ni
+
+            for xbasisj in range(i - p, i + 1):
+                for ybasisj in range(j - q, j + 1):
+                    Nj = N_x[idxy] * N_y[idxx]  # Vectorized basis function
+                    dNjdxi = dBdXi(xi, p, xbasisj, knotvector_x) * N_y[ybasisj]
+                    dNjdeta = N_x[ybasisj] * dBdXi(eta, q, ybasisj, knotvector_y)
+
+                    # Correction for the distance function
+                    djCorrXi = dNjdxi * d[idxx, idxy] + dx[idxx, idxy] * Nj
+                    djCorrEta = dNjdeta * d[idxx, idxy] + dy[idxx, idxy] * Nj
+
+                    K[(p + 1) * (xbasis_indices[0] - (i - p)) + (ybasis_indices[0] - (j - q))][
+                        (p + 1) * (xbasis_indices[0] - (i - p)) + (ybasis_indices[0] - (j - q))] += (
+                            w[idxx] * w[idxy] * (
+                                (diCorrXi * djCorrXi + diCorrEta * djCorrEta))
+                        )
+
+            fi = load_function(xi, eta)
+            Ni_corr = d[idxx, idxy] * Ni
+            dirichlet_xi_eta = dirichletBoundary(xi, eta)
+            Ddirichlet_X = dirichletBoundaryDerivativeX(xi, eta)
+            Ddirichlet_Y = dirichletBoundaryDerivativeY(xi, eta)
+
+            # Update F
+            F[(p + 1) * (xbasis_indices[0] - i + p) + (ybasis_indices[0] - j + q)] += (
+                w[idxx] * w[idxy] * (
+                    fi * Ni_corr  +
+                    (diCorrXi * (dx * dirichlet_xi_eta + d[idxx, idxy] * Ddirichlet_X) +
+                     diCorrEta * (dy * dirichlet_xi_eta + d[idxx, idxy] * Ddirichlet_Y)) -
+                    (Ddirichlet_X * diCorrXi + Ddirichlet_Y * diCorrEta)
+                )
+            )
+
+    return K, F
 def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
     assert not Nurbs_fun
     x1 = knotvector_x[i]
@@ -183,13 +309,17 @@ def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nCont
         else:
             outerElement = False
     if innerElement: #regular element
+        Bspxi = Bspline(knotvector_x,p)
+        Bspeta = Bspline(knotvector_y,q)
         #Ke, Fe = elemantBspline(p,q,knotvector_x, knotvector_y, None,i,j,nControlx, nControly,weigths,ctrlpts)
-        Ke, Fe = elemantBspline(model,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts)
+        Ke, Fe = elemantBspline(model,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts,Bspxi,Bspeta)
     elif outerElement:
         Ke = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
         Fe = np.zeros((p+1)*(q+1))
     else:
-        Ke, Fe = boundaryElementBspline(model,r,p,q,knotvector_x, knotvector_y,i,j,nControlx, nControly)
+        Bspxi = Bspline(knotvector_x,p)
+        Bspeta = Bspline(knotvector_y,q)
+        Ke, Fe = boundaryElementBspline(model,r,p,q,knotvector_x, knotvector_y,i,j,nControlx, nControly,Bspxi,Bspeta)
     return Ke, Fe
 
 def assembly(K,F,Ke,Fe,elemx,elemy,p,q, xDivision, yDivision):
@@ -214,11 +344,12 @@ def solveWeak(K,F):
     F_reduced = F[~zero_f]
     u = np.zeros(len(F))
     #u_reduced = np.dot(np.linalg.inv(K_reduced),F_reduced)
-    inv = np.linalg.inv(K_reduced)
+    #inv = np.linalg.inv(K_reduced)
+    u_reduced = np.linalg.solve(K_reduced,F_reduced)
     #pinv = np.dot(np.linalg.inv(np.dot(np.transpose(K_reduced),K_reduced)),K_reduced)
     #svd_inv = svd_inverse(K_reduced)
     #reg_inv = regularized_inverse(K_reduced)
-    u_reduced = np.dot(inv,F_reduced)
+    #u_reduced = np.dot(inv,F_reduced)
     u[~zero_f] = u_reduced
     return u
 

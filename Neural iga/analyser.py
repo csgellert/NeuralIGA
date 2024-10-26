@@ -8,6 +8,7 @@ import torch
 from NeuralImplicit import NeuralNetwork
 import matplotlib.pyplot as plt
 from math import pi,sin,cos
+import Geomertry
 
 # def loadfunction(x,y):
 #     #return 2-(x**2 + y**2)
@@ -19,7 +20,7 @@ relu_model.load_state_dict(torch.load('relu_model_last.pth',weights_only=True))
 relu_model.eval()
 r=1
 
-test_values = [3,5,7]#,9,13,15]
+test_values = [3,5,7,9,13]#,15]
 esize = [1/(nd+1) for nd in test_values]
 orders = [1,2,3]
 fig,ax = plt.subplots()
@@ -34,6 +35,7 @@ for order in orders:
         y = np.linspace(y0,y1,10)
         NControl_u = len(knotvector_u)-p-1
         NControl_w = len(knotvector_w)-q-1
+        Geomertry.init_spl(x,p,None,knotvector_u)
         
         K = np.zeros(((xDivision+p+1)*(yDivision+q+1),(xDivision+p+1)*(yDivision+q+1)))
         F = np.zeros((xDivision+p+1)*(yDivision+q+1))

@@ -8,6 +8,7 @@ import torch
 from NeuralImplicit import NeuralNetwork
 import cProfile
 from pstats import Stats, SortKey
+import Geomertry
 # Load the model
 relu_model = NeuralNetwork(2,256,2,1)
 relu_model.load_state_dict(torch.load('relu_model_last.pth',weights_only=True))
@@ -15,7 +16,7 @@ relu_model.eval()
 
 r=1
 #defining geometry:
-default = mesh.getDefaultValues(div=3,order=3,delta=0.05)
+default = mesh.getDefaultValues(div=3,order=1,delta=0.05)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
 assert p==q and xDivision == yDivision
@@ -25,7 +26,7 @@ NControl_u = len(knotvector_u)-p-1
 NControl_w = len(knotvector_w)-q-1
 mesh.plotMesh(xDivision,yDivision,delta=0.05)
 #mesh.plotAlayticHeatmap(FEM.solution_function)
-
+Geomertry.init_spl(x,p,None,knotvector_u)
 
 K = np.zeros(((xDivision+p+1)*(yDivision+q+1),(xDivision+p+1)*(yDivision+q+1)))
 F = np.zeros((xDivision+p+1)*(yDivision+q+1))

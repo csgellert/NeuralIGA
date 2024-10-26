@@ -64,6 +64,15 @@ def distance_with_derivative(x,y,model):
     dy = crd.grad[1].item()
     crd.grad.zero_()
     return d,dx,dy
+def distance_with_derivative_vect(x,y,model):
+    crd = torch.tensor([x,y],dtype=torch.float32).T
+    crd.requires_grad = True
+    d = model(crd)
+    grds = torch.autograd.grad(outputs=d, inputs=crd, grad_outputs=torch.ones_like(d),retain_graph=True)
+    dx = grds[0][:,0]
+    dy = grds[0][:,1]
+    #crd.grad.zero_()
+    return d,dx,dy
 def sigmoid(x):
     return 1.0 / (1.0 + np.exp(-x))
 def sigmoid_derivative(x):

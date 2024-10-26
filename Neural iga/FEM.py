@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import mesh
 import math
 import torch
+import numpy as np
 FUNCTION_CASE = 2
 MAX_SUBDIVISION = 4
 def load_function(x,y):
@@ -171,18 +172,26 @@ def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,
     F = np.zeros((p+1)*(q+1))
     Bspxi = Bspline(knotvector_x,p)
     Bspeta = Bspline(knotvector_y,q)
+    gaussP_x = np.array([g[0],g[0],g[1],g[1]])
+    gaussP_y = np.array([g[0],g[1],g[0],g[1]])
+    xi = (x2-x1)/2 * gaussP_x + (x2+x1)/2
+    eta = (y2-y1)/2 * gaussP_y + (y2+y1)/2
 
-    for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
-        for idxy,gpy in enumerate(g): #iterate throug Gauss points functions in y direction
-            xi = (x2-x1)/2 * gpx + (x2+x1)/2
-            eta = (y2-y1)/2 * gpy + (y2+y1)/2
+    d_,dx_,dy_ = mesh.distance_with_derivative_vect(xi,eta,model)
+    bxi_ = Bspxi.collmat(xi)
+    beta_ = Bspeta.collmat(eta)
+    dbdxi_ = Bspxi.collmat(xi,1)
+    dbdeta_ = Bspeta.collmat(eta,1)
+    for idx in range(4): #iterate throug Gauss points functions in x 
             #d = mesh.distanceFromContur(xi,eta,model)
-            d,dx,dy = mesh.distance_with_derivative(xi,eta,model)
+            d = d_[idx].item()
             if d<0: continue
-            bxi = Bspxi(xi)
-            beta = Bspeta(eta)
-            dbdxi = Bspxi.diff(1)(xi)
-            dbdeta = Bspeta.diff(1)(eta)
+            dx = dx_[idx].item()
+            dy = dy_[idx].item()
+            bxi = bxi_[idx]
+            beta = beta_[idx]
+            dbdxi = dbdxi_[idx]
+            dbdeta = dbdeta_[idx]
             #*CAlculating the Ke
             for xbasisi in range(i-p,i+1):
                 for ybasisi in range(j-q,j+1): 
@@ -200,13 +209,15 @@ def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,
                             #correction with the distance function
                             djCorrXi = dNjdxi*d + dx * Nj
                             djCorrEta = dNjdeta*d + dy * Nj
-                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += w[idxx]*w[idxy]*(((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta)))
-                    fi = load_function(xi, eta)
+                            #! In the line below the weigths have been taken out
+                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += (((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta)))
+                    fi = load_function(xi[idx], eta[idx])
                     Ni_corr = d*Ni
-                    dirichlet_xi_eta = dirichletBoundary(xi,eta)
-                    Ddirichlet_X = dirichletBoundaryDerivativeX(xi,eta)
-                    Ddirichlet_Y = dirichletBoundaryDerivativeY(xi,eta)
-                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni_corr + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))
+                    dirichlet_xi_eta = dirichletBoundary(xi[idx],eta[idx])
+                    Ddirichlet_X = dirichletBoundaryDerivativeX(xi[idx],eta[idx])
+                    Ddirichlet_Y = dirichletBoundaryDerivativeY(xi[idx],eta[idx])
+                    #! In the line below the weigths have been taken out
+                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += (fi*Ni_corr + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))
     return K,F
 def GaussQuadrature_opt(model, x1, x2, y1, y2, r, i, j, p, q, knotvector_x, knotvector_y):
     g = np.array([-1 / math.sqrt(3), 1 / math.sqrt(3)])  # Gauss points

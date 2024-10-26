@@ -16,7 +16,7 @@ relu_model.eval()
 
 r=1
 #defining geometry:
-default = mesh.getDefaultValues(div=3,order=1,delta=0.05)
+default = mesh.getDefaultValues(div=3,order=3,delta=0.05)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
 assert p==q and xDivision == yDivision

@@ -302,7 +302,7 @@ def GaussQuadrature_opt(model, x1, x2, y1, y2, r, i, j, p, q, knotvector_x, knot
             )
 
     return K, F
-def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
+def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts,etype=None):
     assert not Nurbs_fun
     x1 = knotvector_x[i]
     x2 = knotvector_x[i+1]
@@ -323,16 +323,43 @@ def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nCont
         Bspxi = Bspline(knotvector_x,p)
         Bspeta = Bspline(knotvector_y,q)
         #Ke, Fe = elemantBspline(p,q,knotvector_x, knotvector_y, None,i,j,nControlx, nControly,weigths,ctrlpts)
+        if etype is not None: etype["inner"] +=1
         Ke, Fe = elemantBspline(model,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts,Bspxi,Bspeta)
     elif outerElement:
         Ke = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
         Fe = np.zeros((p+1)*(q+1))
+        if etype is not None: etype["outer"] +=1
     else:
         Bspxi = Bspline(knotvector_x,p)
         Bspeta = Bspline(knotvector_y,q)
         Ke, Fe = boundaryElementBspline(model,r,p,q,knotvector_x, knotvector_y,i,j,nControlx, nControly,Bspxi,Bspeta)
+        if etype is not None: etype["boundary"] +=1
+    if etype is not None: return Ke, Fe, etype
     return Ke, Fe
-
+def elementTypeChoose(r,knotvector_x, knotvector_y,i,j,etype=None):
+    x1 = knotvector_x[i]
+    x2 = knotvector_x[i+1]
+    y1 = knotvector_y[j]
+    y2 = knotvector_y[j+1]
+    distances = [x1**2 + y1**2,
+                 x1**2 + y2**2,
+                 x2**2 + y1**2,
+                 x2**2 + y2**2]
+    innerElement = True # all points are inside the body
+    outerElement = True # all points are outside the body
+    for point in distances:
+        if point>r:
+            innerElement = False
+        else:
+            outerElement = False
+    if innerElement: #regular element
+        if etype is not None: etype["inner"] +=1
+    elif outerElement:
+        if etype is not None: etype["outer"] +=1
+    else:
+        if etype is not None: etype["boundary"] +=1
+    if etype is not None: return etype
+    return None
 def assembly(K,F,Ke,Fe,elemx,elemy,p,q, xDivision, yDivision):
     l = len(Fe)
     idxs = []
@@ -448,5 +475,21 @@ def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y):
 
 #* TEST
 if __name__ == "__main__":
-    print("2D - Immersed - FEM.py")
-    plotDistanceField()
+    test_values = [30,50]
+    esize = [1/(nd+1) for nd in test_values]
+    orders = [1]
+    fig,ax = plt.subplots()
+    for order in orders:
+        accuracy = []
+        etypes = []
+        for division in test_values:
+            etype = {"outer":0,"inner":0,"boundary":0}
+            default = mesh.getDefaultValues(div=division,order=order,delta=0.005)
+            x0, y0,x1,y1,xDivision,yDivision,p,q = default
+            knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
+            assert p==q and xDivision == yDivision
+            for elemx in range(p,p+xDivision+1):
+                for elemy in range(q,q+xDivision+1):
+                    etype = elementTypeChoose(1,knotvector_u,knotvector_w,elemx,elemy,etype)
+            etypes.append(etype)
+    print(etypes)

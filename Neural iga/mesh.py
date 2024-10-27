@@ -65,7 +65,7 @@ def distance_with_derivative(x,y,model):
     crd.grad.zero_()
     return d,dx,dy
 def distance_with_derivative_vect(x,y,model):
-    crd = torch.tensor([x,y],dtype=torch.float32).T
+    crd = torch.tensor(np.array([x,y]),dtype=torch.float32).T
     crd.requires_grad = True
     d = model(crd)
     grds = torch.autograd.grad(outputs=d, inputs=crd, grad_outputs=torch.ones_like(d),retain_graph=True)

@@ -164,6 +164,86 @@ def GaussQuadrature_old(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
                     F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni_corr + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))
     return K,F
 from bspline import Bspline
+import numpy as np
+import math
+
+def GaussQuadrature_gpt(model, x1, x2, y1, y2, r, i, j, p, q, knotvector_x, knotvector_y, Bspxi, Bspeta):
+    g = np.array([-1 / math.sqrt(3), 1 / math.sqrt(3)])
+    w = np.array([1, 1])
+
+    # Initialize matrices and precompute constants
+    dof = (p + 1) * (q + 1)
+    K = np.zeros((dof, dof))
+    F = np.zeros(dof)
+
+    # Precompute Gaussian points and values
+    gaussP_x, gaussP_y = np.meshgrid(g, g)
+    xi = ((x2 - x1) / 2) * gaussP_x.flatten() + ((x2 + x1) / 2)
+    eta = ((y2 - y1) / 2) * gaussP_y.flatten() + ((y2 + y1) / 2)
+
+    # Precompute spline basis and derivatives for xi and eta
+    bxi_ = Bspxi.collmat(xi)
+    beta_ = Bspeta.collmat(eta)
+    dbdxi_ = Bspxi.collmat(xi, 1)
+    dbdeta_ = Bspeta.collmat(eta, 1)
+
+    # Distance and derivative values for each Gauss point
+    d_, dx_, dy_ = mesh.distance_with_derivative_vect(xi, eta, model)
+    
+    # Precompute boundary and load function values for all Gauss points
+    dirichlet_vals = np.array([dirichletBoundary(x, y) for x, y in zip(xi, eta)])
+    dirichlet_dX = np.array([dirichletBoundaryDerivativeX(x, y) for x, y in zip(xi, eta)])
+    dirichlet_dY = np.array([dirichletBoundaryDerivativeY(x, y) for x, y in zip(xi, eta)])
+    fi_vals = np.array([load_function(x, y) for x, y in zip(xi, eta)])
+
+    # Vectorized iteration over Gauss points
+    for idx in range(4):
+        d = d_[idx]
+        if d < 0:
+            continue  # Skip negative distances
+
+        dx, dy = dx_[idx], dy_[idx]
+        bxi, beta = bxi_[idx], beta_[idx]
+        dbdxi, dbdeta = dbdxi_[idx], dbdeta_[idx]
+
+        # Calculate corrections for basis function pairs
+        for xbasisi in range(i - p, i + 1):
+            for ybasisi in range(j - q, j + 1):
+                Ni = beta[ybasisi] * bxi[xbasisi]
+                dNidxi = dbdxi[xbasisi] * beta[ybasisi]
+                dNidEta = bxi[xbasisi] * dbdeta[ybasisi]
+
+                # Corrections
+                diCorrXi = dNidxi * d + dx * Ni
+                diCorrEta = dNidEta * d + dy * Ni
+                K_idx_i = (p + 1) * (xbasisi - (i - p)) + (ybasisi - (j - q))
+
+                # Update F vector in a fully vectorized way
+                F[K_idx_i] += (
+                    fi_vals[idx] * d * Ni
+                    + diCorrXi * (dx * dirichlet_vals[idx] + d * dirichlet_dX[idx])
+                    + diCorrEta * (dy * dirichlet_vals[idx] + d * dirichlet_dY[idx])
+                    - dirichlet_dX[idx] * diCorrXi
+                    - dirichlet_dY[idx] * diCorrEta
+                )
+
+                # Vectorized update of K matrix
+                for xbasisj in range(i - p, i + 1):
+                    for ybasisj in range(j - q, j + 1):
+                        dNjdxi = dbdxi[xbasisj] * beta[ybasisj]
+                        dNjdeta = bxi[xbasisj] * dbdeta[ybasisj]
+                        Nj = beta[ybasisj] * bxi[xbasisj]
+
+                        djCorrXi = dNjdxi * d + dx * Nj
+                        djCorrEta = dNjdeta * d + dy * Nj
+
+                        # Direct indexing into K
+                        K[K_idx_i, (p + 1) * (xbasisj - (i - p)) + (ybasisj - (j - q))] += (
+                            diCorrXi * djCorrXi + diCorrEta * djCorrEta
+                        )
+    
+    return K, F
+
 def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta):
     
     g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
@@ -475,9 +555,9 @@ def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y):
 
 #* TEST
 if __name__ == "__main__":
-    test_values = [30,50]
+    test_values = [20,30,40]
     esize = [1/(nd+1) for nd in test_values]
-    orders = [1]
+    orders = [3]
     fig,ax = plt.subplots()
     for order in orders:
         accuracy = []

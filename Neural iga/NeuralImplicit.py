@@ -145,21 +145,46 @@ class Siren(nn.Module):
         else:
             torch.save(self.state_dict(), "siren_model_last.pth")
         print("Model saved successfully")
+    def get_model_mse(self,fun_num = 0,n=20000):
+        model_input, ground_truth = generate_data(n,fun_num)
+        model_output = self.forward(model_input)
+        #print(model_input[0])
+        loss = ((model_output - ground_truth)**2).mean()
+        return loss
 def generate_data(num_samples,fun_num = 0):
     if fun_num == 0: # circle
         # Generate random (x, y) coordinates between -1 and 1
-        x = torch.rand(num_samples, 2) * 2 - 1  # Range [-1, 1]
+        margain = 0.1
+        x = torch.rand(num_samples, 2) * (2+margain) - 1-margain  # Range [-1, 1]
         # Compute the target function: 1 - x^2 - y^2
-        y = 1 - x[:, 0] ** 2 - x[:, 1] ** 2
+        y =  1 - x[:, 0] ** 2 - x[:, 1] ** 2
+        return x, y.view(-1, 1)
+    elif fun_num==1: #star shape
+        coordinates = 2 * torch.rand(num_samples, 2) - 1  # Tensor of shape (500, 2) with values in range [-1, 1]
+
+        # Calculate distances for each point
+        distances = torch.empty(num_samples,1)
+        for i in range(num_samples):
+            x, y = coordinates[i]
+            distances[i] = distance_from_star_contour([x.item(), y.item()])
+
+        return coordinates, distances
+    elif fun_num ==2: #circle_aukl
+        # Generate random (x, y) coordinates between -1 and 1
+        margain = 0.1
+        x = torch.rand(num_samples, 2) * (2+margain) - 1-margain  # Range [-1, 1]
+        # Compute the target function: 1 - x^2 - y^2
+        y =  x[:, 0] ** 2 + x[:, 1] ** 2
+        dst = torch.sqrt(y)
+        y = 1-dst
         return x, y.view(-1, 1)
     else:
         raise NotImplementedError
-    
-    
+   
 
 def plotDisctancefunction(eval_fun, N=500,contour = False):
-    x_values = np.linspace(-1.1, 1.1, N)
-    y_values = np.linspace(-1.1, 1.1, N)
+    x_values = np.linspace(-1, 1, N)
+    y_values = np.linspace(-1, 1, N)
     X, Y = np.meshgrid(x_values, y_values)
     Z = np.zeros((N,N))
     # Evaluate the function at each point in the grid

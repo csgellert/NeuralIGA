@@ -25,12 +25,15 @@ siren_model.eval()
 siren_model_euk = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
 siren_model_euk.load_state_dict(torch.load('siren_model_euk_last.pth',weights_only=True,map_location=torch.device('cpu')))
 siren_model_euk.eval()
-model = siren_model_euk
+siren_model_kor_jo = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
+siren_model_kor_jo.load_state_dict(torch.load('siren_model_kor_jo.pth',weights_only=True,map_location=torch.device('cpu')))
+siren_model_kor_jo.eval()
+model = siren_model_kor_jo
 r=1
 
-test_values = [60,70,100]
+test_values = [60]
 esize = [1/(nd+1) for nd in test_values]
-orders = [3]
+orders = [2]
 fig,ax = plt.subplots()
 for order in orders:                                                                            
     accuracy = []

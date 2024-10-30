@@ -19,7 +19,7 @@ siren_model.eval()
 model = relu_model
 r=1
 #defining geometry:
-default = mesh.getDefaultValues(div=3,order=2,delta=0.005)
+default = mesh.getDefaultValues(div=70,order=2,delta=0.005)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
 assert p==q and xDivision == yDivision

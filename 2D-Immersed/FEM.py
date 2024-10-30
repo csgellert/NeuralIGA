@@ -4,8 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mesh
 import math
+from bspline import Bspline
 FUNCTION_CASE = 2
-MAX_SUBDIVISION = 2
+MAX_SUBDIVISION = 4
 def load_function(x,y):
     #! -f(x)
     if FUNCTION_CASE == 1:
@@ -179,46 +180,56 @@ def GaussQuadrature(x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
     w = np.array([1,1])
     K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
     F = np.zeros((p+1)*(q+1))
-    for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
-        for idxy,gpy in enumerate(g): #iterate throug Gauss points functions in y direction
-            xi = (x2-x1)/2 * gpx + (x2+x1)/2
-            eta = (y2-y1)/2 * gpy + (y2+y1)/2
-            d = mesh.distanceFromContur(xi,eta)
+    Bspxi = Bspline(knotvector_x,p)
+    Bspeta = Bspline(knotvector_y,q)
+    gaussP_x = np.array([g[0],g[0],g[1],g[1]])
+    gaussP_y = np.array([g[0],g[1],g[0],g[1]])
+    xi = (x2-x1)/2 * gaussP_x + (x2+x1)/2
+    eta = (y2-y1)/2 * gaussP_y + (y2+y1)/2
+
+    d_ = mesh.distanceFromContur(xi,eta)
+    dx_ = mesh.dddx(xi,eta)
+    dy_ = mesh.dddy(xi,eta)
+    bxi_ = Bspxi.collmat(xi)
+    beta_ = Bspeta.collmat(eta)
+    dbdxi_ = Bspxi.collmat(xi,1)
+    dbdeta_ = Bspeta.collmat(eta,1)
+    for idx in range(4): #iterate throug Gauss points functions in x 
+            #d = mesh.distanceFromContur(xi,eta,model)
+            d = d_[idx].item()
             if d<0: continue
-            Jxi = (x2-x1)/2
-            Jeta = (y2-y1)/2
-            Jacobi = Jxi*Jeta
-            Jacobi = 1
+            dx = dx_[idx].item()
+            dy = dy_[idx].item()
+            bxi = bxi_[idx]
+            beta = beta_[idx]
+            dbdxi = dbdxi_[idx]
+            dbdeta = dbdeta_[idx]
             #*CAlculating the Ke
             for xbasisi in range(i-p,i+1):
                 for ybasisi in range(j-q,j+1): 
+                    dNidxi = dbdxi[xbasisi]*beta[ybasisi]
+                    dNidEta = bxi[xbasisi]*dbdeta[ybasisi]
+                    Ni = beta[ybasisi]*bxi[xbasisi]
+                    diCorrXi = dNidxi*d + dx * Ni
+                    diCorrEta = dNidEta*d + dy * Ni
                     for xbasisj in range(i-p,i+1):
                         for ybasisj in range(j-q,j+1): 
                             #f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                            dNidxi = dBdXi(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                            dNidEta = B(xi, p, xbasisi,knotvector_x)*dBdXi(eta,q,ybasisi,knotvector_y)
-                            dNjdxi = dBdXi(xi,p,xbasisj,knotvector_x)*B(eta,q,ybasisj,knotvector_y)
-                            dNjdeta = B(xi,p,xbasisj,knotvector_x)*dBdXi(eta,q,ybasisj,knotvector_y)
-                            
-                            Ni = B(eta,q,ybasisi,knotvector_y)*B(xi,p,xbasisi,knotvector_x)
-                            Nj = B(eta,q,ybasisj,knotvector_y)*B(xi,p,xbasisj,knotvector_x)
+                            dNjdxi = dbdxi[xbasisj]*beta[ybasisj]
+                            dNjdeta = bxi[xbasisj]*dbdeta[ybasisj]
+                            Nj = beta[ybasisj]*bxi[xbasisj]
                             #correction with the distance function
-                            diCorrXi = dNidxi*d + mesh.dddx(xi,eta) * Ni
-                            diCorrEta = dNidEta*d + mesh.dddy(xi,eta) * Ni
-                            djCorrXi = dNjdxi*d + mesh.dddx(xi,eta) * Nj
-                            djCorrEta = dNjdeta*d + mesh.dddy(xi,eta) * Nj
-                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += w[idxx]*w[idxy]*(((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta))*Jacobi)
-            #* Calculating the Fe vector
-            for xbasisi in range(i-p,i+1):
-                for ybasisi in range(j-q,j+1): 
-                    fi = load_function(xi, eta)
-                    Ni = d*B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                    dNidxi = dBdXi(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                    dNidEta = B(xi, p, xbasisi,knotvector_x)*dBdXi(eta,q,ybasisi,knotvector_y)
-                    diCorrXi = dNidxi*d + mesh.dddx(xi,eta) * B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                    diCorrEta = dNidEta*d + mesh.dddy(xi,eta) * B(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                    
-                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni*Jacobi + (diCorrXi*(mesh.dddx(xi,eta)*dirichletBoundary(xi,eta)+d*dirichletBoundaryDerivativeX(xi,eta)) + diCorrEta*(mesh.dddy(xi,eta)*dirichletBoundary(xi,eta)+d*dirichletBoundaryDerivativeY(xi,eta))) - (dirichletBoundaryDerivativeX(xi,eta)*diCorrXi + dirichletBoundaryDerivativeY(xi,eta)*diCorrEta))
+                            djCorrXi = dNjdxi*d + dx * Nj
+                            djCorrEta = dNjdeta*d + dy * Nj
+                            #! In the line below the weigths have been taken out
+                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += (((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta)))
+                    fi = load_function(xi[idx], eta[idx])
+                    Ni_corr = d*Ni
+                    dirichlet_xi_eta = dirichletBoundary(xi[idx],eta[idx])
+                    Ddirichlet_X = dirichletBoundaryDerivativeX(xi[idx],eta[idx])
+                    Ddirichlet_Y = dirichletBoundaryDerivativeY(xi[idx],eta[idx])
+                    #! In the line below the weigths have been taken out
+                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += (fi*Ni_corr + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))
     return K,F
 def elementChoose(Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts):
     assert not Nurbs_fun
@@ -286,11 +297,12 @@ def solveWeak(K,F):
     F_reduced = F[~zero_f]
     u = np.zeros(len(F))
     #u_reduced = np.dot(np.linalg.inv(K_reduced),F_reduced)
-    inv = np.linalg.inv(K_reduced)
+    #inv = np.linalg.inv(K_reduced)
+    u_reduced = np.linalg.solve(K_reduced,F_reduced)
     #pinv = np.dot(np.linalg.inv(np.dot(np.transpose(K_reduced),K_reduced)),K_reduced)
     #svd_inv = svd_inverse(K_reduced)
     #reg_inv = regularized_inverse(K_reduced)
-    u_reduced = np.dot(inv,F_reduced)
+    #u_reduced = np.dot(inv,F_reduced)
     u[~zero_f] = u_reduced
     return u
 def visualizeResults(surface, ctrlpts, result,k,l,weigths,knotvector_u,knotvector_w,p,q,calc_error = True):

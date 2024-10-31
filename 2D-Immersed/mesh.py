@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 EPS = 0.9
 USE_SIGMOID_FOR_DISTANCE = False
-
+USE_EUCLIDAN_DIST = True
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     assert x0 < x1 and y0 < y1
     knotvector_u = np.linspace(x0,x1,xDivision+2)
@@ -42,14 +42,23 @@ def distanceFromContur(x,y,addsigmoid = USE_SIGMOID_FOR_DISTANCE):
     R2 = 1
     r = x**2 + y**2
     d = R2-r
+    if USE_EUCLIDAN_DIST:
+        #d = sqrt(abs(d)) if d>=0 else -sqrt(abs(d))
+        d = np.where(d>=0,np.sqrt(np.abs(d)),-np.sqrt(np.abs(d))) 
     if addsigmoid: return sigmoid(d)
     return d
 def dddx(x,y,addsigmoid = USE_SIGMOID_FOR_DISTANCE):
     dx = -2*x
+    if USE_EUCLIDAN_DIST:
+        #dx = 0.5*1/sqrt(abs(1-x**2-y**2)) *dx if x**2+y**2 <=1 else -0.5*1/sqrt(abs(1-x**2-y**2)) *dx
+        dx = np.where(x**2+y**2 <=1,0.5*1/np.sqrt(np.abs(1-x**2-y**2)) *dx,-0.5*1/np.sqrt(np.abs(1-x**2-y**2)) *dx) 
     if addsigmoid: return dx*sigmoid_derivative(distanceFromContur(x,y))
     return dx
 def dddy(x,y, addsigmoid = USE_SIGMOID_FOR_DISTANCE):
     dy = -2*y
+    if USE_EUCLIDAN_DIST:
+        dy = np.where(x**2+y**2 <=1,0.5*1/np.sqrt(np.abs(1-x**2-y**2)) *dy,-0.5*1/np.sqrt(np.abs(1-x**2-y**2)) *dy) 
+        #dy = 0.5*1/sqrt(abs(1-x**2-y**2)) *dy if x**2+y**2 <=1 else -0.5*1/sqrt(abs(1-x**2-y**2)) *dy
     if addsigmoid: return dy*sigmoid_derivative(distanceFromContur(x,y))
     return dy
 def sigmoid(x):

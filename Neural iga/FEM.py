@@ -6,7 +6,7 @@ import mesh
 import math
 import torch
 import numpy as np
-FUNCTION_CASE = 2
+FUNCTION_CASE = 5
 MAX_SUBDIVISION = 4
 def load_function(x,y):
     #! -f(x)
@@ -487,13 +487,17 @@ def solveWeak(K,F):
     u[~zero_f] = u_reduced
     return u
 
-def visualizeResultsBspline(model,results,p,q,knotvector_x, knotvector_y,surfacepoints=None):
+def visualizeResultsBspline(model,results,p,q,knotvector_x, knotvector_y,surfacepoints=None,larger_domain=True):
     xPoints = []
     yPoints = []
     result = []
     analitical = []
-    x = np.linspace(-1,1,20)
-    y = np.linspace(-1,1,20)
+    if larger_domain:
+        x = np.linspace(-1,1,40)
+        y = np.linspace(-1,1,40)
+    else:
+        x = np.linspace(0,1,40)
+        y = np.linspace(0,1,40)
     for xx in x:
         for yy in y:
             sum = 0
@@ -509,46 +513,28 @@ def visualizeResultsBspline(model,results,p,q,knotvector_x, knotvector_y,surface
             #sum = 0
             sum += (1-d)*dirichletBoundary(xx,yy)
             if d<0: sum = 0
-            result.append(sum)
-    #fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
-    #ax.scatter(xPoints,yPoints,result)#, edgecolors='face')
-    #ax.scatter(xPoints,yPoints,analitical)
+            try:
+                result.append(sum.item())
+            except:
+                result.append(sum)
+    fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
+    ax.scatter(xPoints,yPoints,result)#, edgecolors='face')
+    ax.scatter(xPoints,yPoints,analitical)
 
-    if surfacepoints:
-        xPoints = []
-        yPoints = []
-        zPoints = []
-        for i in surfacepoints:
-            for q in i:
-                xPoints.append(q[0])  
-                yPoints.append(q[1])  
-                zPoints.append(q[2]) 
-        ax.scatter(xPoints,yPoints,zPoints)
     MSE = (np.square(np.array(result)-np.array(analitical))).mean()
     print(f"MSE: {MSE}")
     plt.show()
-def plotDistanceField():
-    xPoints = []
-    yPoints = []
-    result = []
-
-    x = np.linspace(-1,1,10)
-    y = np.linspace(-1,1,10)
-    for xx in x:
-        for yy in y:
-            xPoints.append(xx)
-            yPoints.append(yy)
-            result.append(mesh.distanceFromContur(xx,yy))
-    fig, ax = plt.subplots(subplot_kw={"projection":"3d"})
-    ax.scatter(xPoints,yPoints,result)#, edgecolors='face')
-    plt.show()
-def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y):
+def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y,larger_domain=True):
     xPoints = []
     yPoints = []
     result = []
     analitical = []
-    x = np.linspace(-1,1,20)
-    y = np.linspace(-1,1,20)
+    if larger_domain:
+        x = np.linspace(-1,1,40)
+        y = np.linspace(-1,1,40)
+    else:
+        x = np.linspace(0,1,40)
+        y = np.linspace(0,1,40)
     for xx in x:
         for yy in y:
             sum = 0

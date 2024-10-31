@@ -22,10 +22,10 @@ siren_model_kor_jo.eval()
 siren_model_L_shape = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
 siren_model_L_shape.load_state_dict(torch.load('siren_model_L-shape.pth',weights_only=True,map_location=torch.device('cpu')))
 siren_model_L_shape.eval()
-model = siren_model
+model = siren_model_L_shape
 r=1
 #defining geometry:
-default = mesh.getDefaultValues(div=10,order=3,delta=0.005)
+default = mesh.getDefaultValues(div=15,order=1,delta=0.005,larger_domain=False)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
 assert p==q and xDivision == yDivision
@@ -58,7 +58,7 @@ result = FEM.solveWeak(K,F)
 print(f"Calculation time: {time.time()-start} ms")
 
 
-FEM.visualizeResultsBspline(model,result,p,q,knotvector_u,knotvector_w,None)
+FEM.visualizeResultsBspline(model,result,p,q,knotvector_u,knotvector_w,None,larger_domain=False)
 
 
 

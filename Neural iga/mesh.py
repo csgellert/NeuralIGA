@@ -27,12 +27,18 @@ def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     knotvector_w = np.insert(knotvector_w,0,[y0 for _ in range(q)])
     knotvector_w = np.append(knotvector_w,[y1 for _ in range(q)])
     return knotvector_u, knotvector_w, weights, ctrlpts
-def getDefaultValues(div=2,order=1,delta = 0):
+def getDefaultValues(div=2,order=1,delta = 0,larger_domain = True):
     assert delta >=0
-    x0 = -1-delta
-    x1 = 1+delta
-    y0 = -1-delta
-    y1 = 1+delta
+    if larger_domain:#[-1,1]
+        x0 = -1-delta
+        x1 = 1+delta
+        y0 = -1-delta
+        y1 = 1+delta
+    else: #[0,1]
+        x0 = 0-delta
+        x1 = 1+delta
+        y0 = 0-delta
+        y1 = 1+delta
     p = order
     q = order
     xDivision = div

@@ -15,25 +15,25 @@ import Geomertry
 #     return - pi**2 /2 *cos(pi*x/2)*cos(pi*y/2)
 # def solutionfunction(x,y):
 #     return cos(pi*x/2)*cos(pi*y/2)
-relu_model = NeuralNetwork(2,256,2,1)
-print(sum(p.numel() for p in relu_model.parameters() if p.requires_grad))
-relu_model.load_state_dict(torch.load('relu_model_last.pth',weights_only=True,map_location=torch.device('cpu')))
-relu_model.eval()
+#relu_model = NeuralNetwork(2,256,2,1)
+#print(sum(p.numel() for p in relu_model.parameters() if p.requires_grad))
+#relu_model.load_state_dict(torch.load('relu_model_last.pth',weights_only=True,map_location=torch.device('cpu')))
+#relu_model.eval()#not evaluated
 siren_model = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
 siren_model.load_state_dict(torch.load('siren_model_last.pth',weights_only=True,map_location=torch.device('cpu')))
-siren_model.eval()
+siren_model.eval()#v0
 siren_model_euk = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
 siren_model_euk.load_state_dict(torch.load('siren_model_euk_last.pth',weights_only=True,map_location=torch.device('cpu')))
-siren_model_euk.eval()
+siren_model_euk.eval()#v1
 siren_model_kor_jo = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
 siren_model_kor_jo.load_state_dict(torch.load('siren_model_kor_jo.pth',weights_only=True,map_location=torch.device('cpu')))
-siren_model_kor_jo.eval()
-model = siren_model_kor_jo
+siren_model_kor_jo.eval()#euk
+model = siren_model
 r=1
 
-test_values = [60]
+test_values = [120]
 esize = [1/(nd+1) for nd in test_values]
-orders = [2]
+orders = [1,2,3]
 fig,ax = plt.subplots()
 for order in orders:                                                                            
     accuracy = []

@@ -19,6 +19,10 @@ def load_function(x,y):
         return -8*x
     elif FUNCTION_CASE == 4:
         return -8*x
+    elif FUNCTION_CASE == 5:#L-shape
+        return 8*math.pi*math.pi*math.sin(2*math.pi*x)*math.sin(2*math.pi*y)
+    elif FUNCTION_CASE == 6: #tube
+        return -(x**2 + y**2)
     else:
         raise NotImplementedError
 def solution_function(x,y):
@@ -30,6 +34,8 @@ def solution_function(x,y):
         return x*(x**2 + y**2 -1) + 2
     elif FUNCTION_CASE == 4:
         return x*(x**2 + y**2 -1) + x +2*y
+    elif FUNCTION_CASE == 5: #L-shape
+        return math.sin(2*math.pi*x)*math.sin(2*math.pi*y)
     else: raise NotImplementedError
 def dirichletBoundary(x,y):
     if FUNCTION_CASE == 1:
@@ -40,18 +46,24 @@ def dirichletBoundary(x,y):
         return 2
     if FUNCTION_CASE == 4:
         return x+2*y
+    elif FUNCTION_CASE == 5:
+        return 0
     else: raise NotImplementedError
 def dirichletBoundaryDerivativeX(x,y):
     if FUNCTION_CASE <= 3:
         return 0
     elif FUNCTION_CASE == 4:
         return 1
+    elif FUNCTION_CASE == 5:#L-shape
+        return 0
     else: raise NotImplementedError
 def dirichletBoundaryDerivativeY(x,y):
     if FUNCTION_CASE <= 3:
         return 0
     elif FUNCTION_CASE == 4:
         return 2
+    elif FUNCTION_CASE ==5:  #L-shape
+        return 0
     else: raise NotImplementedError
 
 def elemantBspline(model,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts,Bspxi,Bspeta):
@@ -388,14 +400,16 @@ def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nCont
     x2 = knotvector_x[i+1]
     y1 = knotvector_y[j]
     y2 = knotvector_y[j+1]
-    distances = [x1**2 + y1**2,
+    """distances = [x1**2 + y1**2,
                  x1**2 + y2**2,
                  x2**2 + y1**2,
-                 x2**2 + y2**2]
+                 x2**2 + y2**2]"""
+    points = torch.tensor(np.array([[x1,y1],[x2,y1],[x1,y2],[x2,y2]]),dtype=torch.float32)
+    distances = model(points)
     innerElement = True # all points are inside the body
     outerElement = True # all points are outside the body
     for point in distances:
-        if point>r:
+        if point<0:
             innerElement = False
         else:
             outerElement = False
@@ -421,14 +435,16 @@ def elementTypeChoose(r,knotvector_x, knotvector_y,i,j,etype=None):
     x2 = knotvector_x[i+1]
     y1 = knotvector_y[j]
     y2 = knotvector_y[j+1]
-    distances = [x1**2 + y1**2,
+    """distances = [x1**2 + y1**2,
                  x1**2 + y2**2,
                  x2**2 + y1**2,
-                 x2**2 + y2**2]
+                 x2**2 + y2**2]"""
+    points = torch.tensor(np.array([[x1,y1],[x2,y1],[x1,y2],[x2,y2]]),dtype=torch.float32)
+    distances = model(points)
     innerElement = True # all points are inside the body
     outerElement = True # all points are outside the body
     for point in distances:
-        if point>r:
+        if point<0:
             innerElement = False
         else:
             outerElement = False
@@ -555,7 +571,12 @@ def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y):
 
 #* TEST
 if __name__ == "__main__":
-    test_values = [20,30,40]
+    from NeuralImplicit import Siren
+    siren_model_kor_jo = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
+    siren_model_kor_jo.load_state_dict(torch.load('siren_model_kor_jo.pth',weights_only=True,map_location=torch.device('cpu')))
+    siren_model_kor_jo.eval()
+    model = siren_model_kor_jo
+    test_values = [20,30,40,80,120]
     esize = [1/(nd+1) for nd in test_values]
     orders = [3]
     fig,ax = plt.subplots()

@@ -178,13 +178,68 @@ def generate_data(num_samples,fun_num = 0):
         dst = torch.sqrt(y)
         y = 1-dst
         return x, y.view(-1, 1)
+    if fun_num == 4: # L-shape
+        coordinates = 2 * torch.rand(num_samples, 2) - 1  # Tensor of shape (500, 2) with values in range [-1, 1]
+
+        # Calculate distances for each point
+        distances = torch.empty(num_samples,1)
+        for i in range(num_samples):
+            x, y = coordinates[i]
+            distances[i] = l_shape_distance([x.item(), y.item()])
+
+        return coordinates, distances
+    if fun_num == 5: # L-shape quadratic
+        coordinates = 2 * torch.rand(num_samples, 2) - 1  # Tensor of shape (500, 2) with values in range [-1, 1]
+
+        # Calculate distances for each point
+        distances = torch.empty(num_samples,1)
+        for i in range(num_samples):
+            x, y = coordinates[i]
+            distances[i] = l_shape_distance([x.item(), y.item()])
+        distances = torch.sign(distances)*distances**2
+        return coordinates, distances
     else:
         raise NotImplementedError
    
+def l_shape_distance(crd):
+    """
+    Calculates the distance of a point (x, y) from an L-shaped domain.
 
+    Args:
+        x: The x-coordinate of the point.
+        y: The y-coordinate of the point.
+
+    Returns:
+        The distance of the point from the L-shaped domain.
+    """
+
+    x = crd[0]
+    y = crd[1]
+    corners = [(0.0, 1.0), (0.0, 0.0), (1.0, 0.0),(1.0,0.5),(0.5,0.5),(0.5,1.0)]
+    dists = [distance_point_to_line(x,y,corners[i][0], corners[i][1], corners[i+1][0],corners[i+1][1]) for i in range(len(corners)-1)]
+    dists.append(distance_point_to_line(x,y,corners[-1][0], corners[-1][1], corners[0][0],corners[0][1]))
+    dist = min(dists)
+
+    sgn1 = 1 if x>=0 and x<1 and y>=0 and y<0.5 else -1
+    sgn2 = 1 if x>=0 and x<0.5 and y>=0.5 and y<=1 else -1
+    sgn = max(sgn1,sgn2)
+
+
+    return dist*sgn
+import math
+def distance_point_to_line(px, py, x1, y1, x2, y2):
+    """Calculate the perpendicular distance from point (px, py) to the line segment (x1, y1) -> (x2, y2)."""
+    line_length_sq = (x2 - x1) ** 2 + (y2 - y1) ** 2
+    if line_length_sq == 0:  # The segment is a point
+        return math.sqrt((px - x1) ** 2 + (py - y1) ** 2)
+
+    t = max(0, min(1, ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / line_length_sq))
+    proj_x = x1 + t * (x2 - x1)
+    proj_y = y1 + t * (y2 - y1)
+    return math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
 def plotDisctancefunction(eval_fun, N=500,contour = False):
-    x_values = np.linspace(-1, 1, N)
-    y_values = np.linspace(-1, 1, N)
+    x_values = np.linspace(0, 1.05, N)
+    y_values = np.linspace(0, 1.05, N)
     X, Y = np.meshgrid(x_values, y_values)
     Z = np.zeros((N,N))
     # Evaluate the function at each point in the grid

@@ -6,7 +6,7 @@ import mesh
 import math
 import torch
 import numpy as np
-FUNCTION_CASE = 5
+FUNCTION_CASE = 2
 MAX_SUBDIVISION = 4
 def load_function(x,y):
     #! -f(x)
@@ -554,7 +554,95 @@ def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y,larger_do
     MSE = (np.square(np.array(result)-np.array(analitical))).mean()
     print(f"MSE: {MSE}")
     return MSE
+def plotErrorHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain = True,N=150):
 
+    marg = 0.1
+    if larger_domain:
+        x = np.linspace(-1-marg,1+marg,N)
+        y = np.linspace(-1-marg,1+marg,N)
+    else:
+        x = np.linspace(0-marg,1+marg,N)
+        y = np.linspace(0-marg,1+marg,N)
+    X,Y = np.meshgrid(x,y)
+    Z_N=np.zeros((N,N))
+    for idxx,xx in enumerate(x):
+        for idxy, yy in enumerate(y):
+            sum = 0
+            d = mesh.distanceFromContur(xx,yy,model).detach().numpy()
+            
+            for xbasis in range(len(knotvector_x)-p-1):
+                for ybasis in range(len(knotvector_y)-q-1):
+                    sum += B(xx,p,xbasis,knotvector_x)*B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
+            sum = d*sum
+            #sum = 0
+            sum += (1-d)*dirichletBoundary(xx,yy)
+            if d<0: sum = 0
+            Z_N[idxx,idxy] = sum
+    #MSE = (np.square(np.array(result)-np.array(analitical))).mean()
+    #print(f"MSE: {MSE}")
+    #return MSE
+    plt.contourf(X, Y, Z_N,levels=20)
+    points = [(0.0, 1.0), (0.0, 0.0), (1.0, 0.0),(1.0,0.5),(0.5,0.5),(0.5,1.0),(0.0, 1.0)]
+
+    # Plot red lines between the points
+    for i in range(len(points)-1):
+            plt.plot([points[i][0], points[i+1][0]], [points[i][1], points[i+1][1]], 'r-')
+
+    #plt.axis('equal')
+    #highlight_level = 0.0
+    #plt.contour(X, Y, Z, levels=[highlight_level], colors='red')
+    plt.colorbar()
+    plt.title('Solution of the PDE')
+    plt.grid(True)
+    plt.show()
+def plotResultHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain = True,N=150):
+    marg = 0.05
+    if larger_domain:
+        x = np.linspace(-1-marg,1+marg,N)
+        y = np.linspace(-1-marg,1+marg,N)
+    else:
+        x = np.linspace(0-marg,1+marg,N)
+        y = np.linspace(0-marg,1+marg,N)
+    X,Y = np.meshgrid(x,y)
+    Z_A=np.zeros((N,N))
+    Z_N=np.zeros((N,N))
+    ERR=np.zeros((N,N))
+    for idxx,xx in enumerate(x):
+        for idxy, yy in enumerate(y):
+            sum = 0
+            d = mesh.distanceFromContur(xx,yy,model).detach().numpy()
+            Z_A[idxx,idxy] = solution_function(xx,yy) if d>=0 else 0
+            
+            for xbasis in range(len(knotvector_x)-p-1):
+                for ybasis in range(len(knotvector_y)-q-1):
+                    sum += B(xx,p,xbasis,knotvector_x)*B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
+            sum = d*sum
+            #sum = 0
+            sum += (1-d)*dirichletBoundary(xx,yy)
+            if d<0: sum = 0
+            Z_N[idxx,idxy] = sum
+    #MSE = (np.square(np.array(result)-np.array(analitical))).mean()
+    #print(f"MSE: {MSE}")
+    #return MSE
+    ERR = np.abs(Z_N-Z_A)
+    plt.contourf(X, Y, Z_A,levels=20)
+    #plt.axis('equal')
+    plt.colorbar()
+    if larger_domain:
+        highlight_level = 0.0
+        plt.contour(X, Y, Z_A, levels=[highlight_level], colors='red') 
+    else:
+        points = [(0.0, 1.0), (0.0, 0.0), (1.0, 0.0),(1.0,0.5),(0.5,0.5),(0.5,1.0),(0.0, 1.0)]
+
+        # Plot red lines between the points
+        for i in range(len(points)-1):
+                plt.plot([points[i][0], points[i+1][0]], [points[i][1], points[i+1][1]], 'r-')
+
+    # Show the plot
+    
+    plt.title('Solution')
+    plt.grid(True)
+    plt.show()
 #* TEST
 if __name__ == "__main__":
     from NeuralImplicit import Siren
@@ -562,9 +650,9 @@ if __name__ == "__main__":
     siren_model_kor_jo.load_state_dict(torch.load('siren_model_kor_jo.pth',weights_only=True,map_location=torch.device('cpu')))
     siren_model_kor_jo.eval()
     model = siren_model_kor_jo
-    test_values = [20,30,40,80,120]
+    test_values = [20,30,40,50,60,80,120]
     esize = [1/(nd+1) for nd in test_values]
-    orders = [3]
+    orders = [2]
     fig,ax = plt.subplots()
     for order in orders:
         accuracy = []

@@ -97,15 +97,15 @@ def get_gauss_points_regular_FEM(nGp=2):
 """
 
 if __name__ == "__main__":
-   k = 2
+   k = 3
    
    import numpy as np
    fig, ax = plt.subplots()
    #xx = np.linspace(1.5, 4.5, 500)
-   xx2 = np.linspace(1, 8, 500)
-   t = [1,2,3,4,5,6,7,8]
+   xx2 = np.linspace(1, 8, 1000)
+   t = [1,1,1,1,2,3,3,4,5,5,5,6,7,8,8,8,8]
    #t2 = [4,0, 1, 2, 3, 4, 5, 6,6]
-   c = [1,1,1,1,1,1,1,1,1,1,1,1]
+   c = [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
    #ax.plot(xx, [bspline(x, t, c ,k) for x in xx], 'r-', lw=3, label='naive')
    #ax.plot(xx2, [bspline(x, t, c ,k) for x in xx2], 'g-', lw=3, label='naive')
    #ax.plot(xx, spl(xx), 'b-', lw=4, alpha=0.7, label='BSpline')

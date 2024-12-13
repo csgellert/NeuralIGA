@@ -31,10 +31,14 @@ siren_model_kor_jo.eval()#euk
 siren_model_L_shape = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
 siren_model_L_shape.load_state_dict(torch.load('siren_model_L-shape.pth',weights_only=True,map_location=torch.device('cpu')))
 siren_model_L_shape.eval()
+siren_model_L_shape2 = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
+siren_model_L_shape2.load_state_dict(torch.load('siren_model_L-shape_qvad.pth',weights_only=True,map_location=torch.device('cpu')))
+siren_model_L_shape2.eval()
 model = siren_model_L_shape
+
 r=1
 
-test_values = [80]
+test_values = [20,40]
 esize = [1/(nd+1) for nd in test_values]
 orders = [2]
 fig,ax = plt.subplots()
@@ -62,7 +66,7 @@ for order in orders:
                 K,F = FEM.assembly(K,F,Ke,Fe,elemx,elemy,p,q,xDivision,yDivision)
         #print(dirichlet)
         result = FEM.solveWeak(K,F)
-        accuracy.append(FEM.calculateErrorBspline(model,result,p,q,knotvector_u, knotvector_w))
+        accuracy.append(FEM.calculateErrorBspline(model,result,p,q,knotvector_u, knotvector_w,larger_domain=False))
         etypes.append(etype)
     #ax.semilogy(test_values,accuracy)
     ax.loglog(esize,accuracy)

@@ -62,3 +62,41 @@ def plotBsplineBasis(x, t, k,derivative = False, sum = False):
    if sum:
       ax.plot(x,summ,'c-')
    plt.show()
+def Surface(u,w,knotvector_u,knotvector_w,p,q,ctrlpts):
+    k = len(knotvector_u)-p-1
+    l = len(knotvector_w)-q-1
+    sum = np.array([0,0],dtype='float64')
+    for i in range(0,k):
+        for j in range(0,l):
+            sum += np.array(ctrlpts[j][i])*B(u,p,i,knotvector_u)*B(w,q,j,knotvector_w)
+    return list(sum)
+def GenerateSurface(knotvector_u,knotvector_w,p,q,ctrlpts):
+      u = np.linspace(knotvector_u[0], knotvector_u[-1], 100)
+      w = np.linspace(knotvector_w[0], knotvector_w[-1], 100)
+      Surfacepoints = []
+      for uu in u:
+         row = []
+         for ww in w:
+            row.append(Surface(uu, ww, knotvector_u, knotvector_w, p, q, ctrlpts))
+            Surfacepoints.append(row)
+      return Surfacepoints
+def plotGeneratedSurface(knotvector_u, knotvector_w, p, q, ctrlpts):
+   surface = GenerateSurface(knotvector_u, knotvector_w, p, q, ctrlpts)
+   fig, ax = plt.subplots()
+   xPoints = []
+   yPoints = []
+   for i in surface:
+      for q in i:
+         xPoints.append(q[0])  
+         yPoints.append(q[1])  
+   ax.scatter(xPoints, yPoints)
+   # Plot control points
+   x = []
+   y = []
+   z = []
+   for j in ctrlpts:
+      for i in j:
+         x.append(i[0])
+         y.append(i[1])
+   ax.scatter(x, y, c="r", marker="*")
+   plt.show()

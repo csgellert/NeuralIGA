@@ -11,7 +11,7 @@ def loadfunction(x,y):
 def solutionfunction(x,y):
     return cos(pi*x/2)*cos(pi*y/2)
 
-test_values = [3,5,7,9,11]
+test_values = [15,20,40]
 esize = [1/(nd+1) for nd in test_values]
 orders = [1,2,3]
 fig,ax = plt.subplots()
@@ -42,6 +42,7 @@ for order in orders:
         accuracy.append(FEM.calculateErrorBspline(Surfacepoints,ctrlpts,result,NControl_u,NControl_w,weigths,knotvector_u,knotvector_w,p,q,solutionfunction))
     #ax.semilogy(test_values,accuracy)
     ax.loglog(esize,accuracy)
+print(accuracy)
 ax.set_title("Convergence of MSE based on number of elements")
 #ax.set_xlabel("Number of divisions")
 ax.set_xlabel("log(Element size)")

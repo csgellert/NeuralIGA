@@ -7,7 +7,7 @@ from NeuralImplicit import Siren
 
 EPS = 0.9
 USE_SIGMOID_FOR_DISTANCE = False
-TRANSFORM = "exponential"  # Options: "sigmoid", "tanh", None
+TRANSFORM = None  # Options: "sigmoid", "tanh", None
 
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     assert x0 < x1 and y0 < y1

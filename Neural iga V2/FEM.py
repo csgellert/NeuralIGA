@@ -7,6 +7,7 @@ import math
 import torch
 import numpy as np
 FUNCTION_CASE = 5
+LARGER_DOMAIN = False # if True, the domain is [-1,1]x[-1,1], otherwise [0,1]x[0,1]
 MAX_SUBDIVISION = 4
 def load_function(x,y):
     #! -f(x)
@@ -144,15 +145,26 @@ import numpy as np
 import math
 
 def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta):
-    
-    g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
-    w = np.array([1,1])
+    if p <=2:
+        g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
+        w = np.array([1,1])
+        gaussP_x = np.array([g[0],g[0],g[1],g[1]])
+        gaussP_y = np.array([g[0],g[1],g[0],g[1]])
+        gauss_weights = np.array([w[0],w[0],w[1],w[1]])
+        num_gauss_points = 4
+    else:
+        g = np.array([-math.sqrt(3/5), 0, math.sqrt(3/5)])
+        w = np.array([5/9, 8/9, 5/9])
+        gaussP_x = np.array([g[0],g[0],g[0],g[1],g[1],g[1],g[2],g[2],g[2]])
+        gaussP_y = np.array([g[0],g[1],g[2],g[0],g[1],g[2],g[0],g[1],g[2]])
+        gauss_weights = np.array([w[0]*w[0],w[1]*w[0],w[2]*w[0],w[0]*w[1],w[1]*w[1],w[2]*w[1],w[0]*w[2],w[1]*w[2],w[2]*w[2]])
+        num_gauss_points = 9
+
     K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
     F = np.zeros((p+1)*(q+1))
     Bspxi = Bspline(knotvector_x,p)
     Bspeta = Bspline(knotvector_y,q)
-    gaussP_x = np.array([g[0],g[0],g[1],g[1]])
-    gaussP_y = np.array([g[0],g[1],g[0],g[1]])
+    
     xi = (x2-x1)/2 * gaussP_x + (x2+x1)/2
     eta = (y2-y1)/2 * gaussP_y + (y2+y1)/2
 
@@ -161,7 +173,7 @@ def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,
     beta_ = Bspeta.collmat(eta)
     dbdxi_ = Bspxi.collmat(xi,1)
     dbdeta_ = Bspeta.collmat(eta,1)
-    for idx in range(4): #iterate throug Gauss points functions in x 
+    for idx in range(num_gauss_points): #iterate throug Gauss points functions in x
             #d = mesh.distanceFromContur(xi,eta,model)
             d = d_[idx].item()
             if d<0: continue
@@ -188,15 +200,15 @@ def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,
                             #correction with the distance function
                             djCorrXi = dNjdxi*d + dx * Nj
                             djCorrEta = dNjdeta*d + dy * Nj
-                            #! In the line below the weigths have been taken out
-                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += (((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta)))
+                            #Not anymore: In the line below the weigths have been taken out
+                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += (((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta)))*gauss_weights[idx]
                     fi = load_function(xi[idx], eta[idx])
                     Ni_corr = d*Ni
                     dirichlet_xi_eta = dirichletBoundary(xi[idx],eta[idx])
                     Ddirichlet_X = dirichletBoundaryDerivativeX(xi[idx],eta[idx])
                     Ddirichlet_Y = dirichletBoundaryDerivativeY(xi[idx],eta[idx])
-                    #! In the line below the weigths have been taken out
-                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += (fi*Ni_corr + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))
+                    # Not anymore: In the line below the weigths have been taken out
+                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += (fi*Ni_corr + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))* gauss_weights[idx]
     return K,F
 
 def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts,etype=None):

@@ -2,7 +2,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import math
 from bspline import Bspline
-
+from torch import nn
+import torch
 bsp=None
 dbps = None
 def init_spl(x,k,i,t):
@@ -79,33 +80,102 @@ def plotBsplineBasis(x, t, k,derivative = False, sum = False):
    if sum:
       ax.plot(x,summ,'c-')
    plt.show()
+def distance_point_to_line(px, py, x1, y1, x2, y2):
+    """Calculate the perpendicular distance from point (px, py) to the line segment (x1, y1) -> (x2, y2)."""
+    line_length_sq = (x2 - x1) ** 2 + (y2 - y1) ** 2
+    if line_length_sq == 0:  # The segment is a point
+        return math.sqrt((px - x1) ** 2 + (py - y1) ** 2)
+
+    t = max(0, min(1, ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / line_length_sq))
+    proj_x = x1 + t * (x2 - x1)
+    proj_y = y1 + t * (y2 - y1)
+    return math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+def torch_distance_point_to_line(px, py, x1, y1, x2, y2):
+        line_length_sq = (x2 - x1) ** 2 + (y2 - y1) ** 2
+        if line_length_sq == 0:
+            return torch.sqrt((px - x1) ** 2 + (py - y1) ** 2)
+        t = torch.clamp(((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / line_length_sq, 0.0, 1.0)
+        proj_x = x1 + t * (x2 - x1)
+        proj_y = y1 + t * (y2 - y1)
+        return torch.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
+def l_shape_distance(crd):
+    """
+    Calculates the signed distance from a point to the contour of an L-shaped domain.
+    Negative inside, positive outside.
+    """
+    x = crd[..., 0]
+    y = crd[..., 1]
+    # Define the L-shape as the union of two rectangles: [0,1]x[0,0.5] and [0,0.5]x[0.5,1]
+    # The boundary consists of 6 segments (corners closed)
+    corners = [
+        (0.0, 1.0), (0.0, 0.0), (1.0, 0.0), (1.0, 0.5),
+        (0.5, 0.5), (0.5, 1.0), (0.0, 1.0)
+    ]
+    # Compute distance to each segment
+    dists = [
+        torch_distance_point_to_line(x, y, corners[i][0], corners[i][1], corners[i+1][0], corners[i+1][1])
+        for i in range(len(corners)-1)
+    ]
+    dist = torch.min(torch.stack(dists), dim=0).values
+
+    # Inside test: inside if in [0,1]x[0,0.5] or [0,0.5]x[0.5,1]
+    inside_rect1 = (x >= 0) & (x <= 1) & (y >= 0) & (y <= 0.5)
+    inside_rect2 = (x >= 0) & (x <= 0.5) & (y > 0.5) & (y <= 1)
+    inside = inside_rect1 | inside_rect2
+    sign = - torch.where(inside, -1.0, 1.0)
+    # Ensure sign is on the same device and dtype as dist
+    sign = sign.to(dist.dtype).to(dist.device)
+    return dist * sign
+def dist_to_circle(crd):
+      x = crd[..., 0]
+      y = crd[..., 1]
+      return 1 - torch.sqrt(x ** 2 + y ** 2)
+
+def dist_to_circle_derivative(crd):
+    x = crd[0]
+    y = crd[1]
+    norm = np.sqrt(x**2 + y**2)
+    if norm == 0:
+        return np.array([0, 0])
+    return -np.array([x, y]) / norm
+class AnaliticalDistanceCircle(nn.Module):
+   def __init__(self):
+      super().__init__()
+   def forward(self, crd):
+      return dist_to_circle(crd)
+   def create_contour_plot(self, resolution=100):
+      x = np.linspace(0, 1, resolution)
+      y = np.linspace(0, 1, resolution)
+      X, Y = np.meshgrid(x, y)
+      crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+      with torch.no_grad():
+         Z = self.forward(crd).cpu().numpy()
+      plt.contourf(X, Y, Z, levels=50, cmap='viridis')
+      plt.colorbar(label='Distance')
+      plt.xlabel('x')
+      plt.ylabel('y')
+      plt.title('Contour plot of distance function')
+      plt.show()
+class AnaliticalDistanceLshape(nn.Module):
+   def __init__(self):
+      super().__init__()
+   def forward(self, crd):
+      return l_shape_distance(crd)
+   def create_contour_plot(self, resolution=100):
+      x = np.linspace(0, 1, resolution)
+      y = np.linspace(0, 1, resolution)
+      X, Y = np.meshgrid(x, y)
+      crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+      with torch.no_grad():
+         Z = self.forward(crd).cpu().numpy()
+      plt.contourf(X, Y, Z, levels=50, cmap='viridis')
+      plt.colorbar(label='Distance')
+      plt.xlabel('x')
+      plt.ylabel('y')
+      plt.title('Contour plot of distance function')
+      plt.show()
 
 if __name__ == "__main__":
-   #print("2D - Immersed - FEM.py")
-   x=np.linspace(-1,1,100)
-   knt = [-1,-1,-1,-1,0,1,1,1,1]
-   p=3
-   bspe = Bspline(knt,p)
-   vec = [-0.25 , 0.25]
-   import bspline.splinelab as splinelab
-   tmp = bspe.collmat(vec)
-   print(tmp)
-   tmp2 = bspe.collmat([0,0.4,0.5])
-   print(tmp2)
-   d = bspe.diff(1)
-   print(d(0)[1])
-   init_spl(x,p,None,knt)
-   bspe.plot()
-   import time
-   strart = time.time()
-   for i in range(10000):
-      tmp = B(0.25,3,2,knt)
-   print("sajat:",time.time()-strart)
-   strart = time.time()
-   for i in range(1000):
-      tmp = bspe(0.25)[3]
-   print("sajat:",time.time()-strart)
-   print(bsp(-1))
-   #plt.plot(x,bsp(x))
-   plt.show()
-   #plotBsplineBasis(x,knt,p)
+   analitical_model2 = AnaliticalDistanceLshape()
+   model = analitical_model2
+   model.create_contour_plot(resolution=100)

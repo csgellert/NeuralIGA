@@ -6,7 +6,8 @@ import mesh
 import math
 import torch
 import numpy as np
-FUNCTION_CASE = 2
+FUNCTION_CASE = 5
+LARGER_DOMAIN = FUNCTION_CASE <=4 # if True, the domain is [-1,1]x[-1,1], otherwise [0,1]x[0,1]
 MAX_SUBDIVISION = 4
 def load_function(x,y):
     #! -f(x)
@@ -138,143 +139,41 @@ def Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,l
         K+= Kret/4
         F+=Fret/4
         return K,F
-def GaussQuadrature_old(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y):
-    g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
-    w = np.array([1,1])
-    K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
-    F = np.zeros((p+1)*(q+1))
-    for idxx,gpx in enumerate(g): #iterate throug Gauss points functions in x direction
-        for idxy,gpy in enumerate(g): #iterate throug Gauss points functions in y direction
-            xi = (x2-x1)/2 * gpx + (x2+x1)/2
-            eta = (y2-y1)/2 * gpy + (y2+y1)/2
-            #d = mesh.distanceFromContur(xi,eta,model)
-            d,dx,dy = mesh.distance_with_derivative(xi,eta,model)
-            if d<0: continue
-            #*CAlculating the Ke
-            for xbasisi in range(i-p,i+1):
-                for ybasisi in range(j-q,j+1): 
-                    dNidxi = dBdXi(xi,p,xbasisi,knotvector_x)*B(eta,q,ybasisi,knotvector_y)
-                    dNidEta = B(xi, p, xbasisi,knotvector_x)*dBdXi(eta,q,ybasisi,knotvector_y)
-                    Ni = B(eta,q,ybasisi,knotvector_y)*B(xi,p,xbasisi,knotvector_x)
-                    diCorrXi = dNidxi*d + dx * Ni
-                    diCorrEta = dNidEta*d + dy * Ni
-                    for xbasisj in range(i-p,i+1):
-                        for ybasisj in range(j-q,j+1): 
-                            #f = R2(nControlx,nControly,xbasis,ybasis,xi,eta,weigths,knotvector_x,knotvector_y,p,q)
-                            dNjdxi = dBdXi(xi,p,xbasisj,knotvector_x)*B(eta,q,ybasisj,knotvector_y)
-                            dNjdeta = B(xi,p,xbasisj,knotvector_x)*dBdXi(eta,q,ybasisj,knotvector_y)
-                            Nj = B(eta,q,ybasisj,knotvector_y)*B(xi,p,xbasisj,knotvector_x)
-                            #correction with the distance function
-                            djCorrXi = dNjdxi*d + dx * Nj
-                            djCorrEta = dNjdeta*d + dy * Nj
-                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += w[idxx]*w[idxy]*(((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta)))
-                    fi = load_function(xi, eta)
-                    Ni_corr = d*Ni
-                    dirichlet_xi_eta = dirichletBoundary(xi,eta)
-                    Ddirichlet_X = dirichletBoundaryDerivativeX(xi,eta)
-                    Ddirichlet_Y = dirichletBoundaryDerivativeY(xi,eta)
-                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += w[idxx]*w[idxy]*(fi*Ni_corr + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))
-    return K,F
+
 from bspline import Bspline
 import numpy as np
 import math
 
-def GaussQuadrature_gpt(model, x1, x2, y1, y2, r, i, j, p, q, knotvector_x, knotvector_y, Bspxi, Bspeta):
-    g = np.array([-1 / math.sqrt(3), 1 / math.sqrt(3)])
-    w = np.array([1, 1])
-
-    # Initialize matrices and precompute constants
-    dof = (p + 1) * (q + 1)
-    K = np.zeros((dof, dof))
-    F = np.zeros(dof)
-
-    # Precompute Gaussian points and values
-    gaussP_x, gaussP_y = np.meshgrid(g, g)
-    xi = ((x2 - x1) / 2) * gaussP_x.flatten() + ((x2 + x1) / 2)
-    eta = ((y2 - y1) / 2) * gaussP_y.flatten() + ((y2 + y1) / 2)
-
-    # Precompute spline basis and derivatives for xi and eta
-    bxi_ = Bspxi.collmat(xi)
-    beta_ = Bspeta.collmat(eta)
-    dbdxi_ = Bspxi.collmat(xi, 1)
-    dbdeta_ = Bspeta.collmat(eta, 1)
-
-    # Distance and derivative values for each Gauss point
-    d_, dx_, dy_ = mesh.distance_with_derivative_vect(xi, eta, model)
-    
-    # Precompute boundary and load function values for all Gauss points
-    dirichlet_vals = np.array([dirichletBoundary(x, y) for x, y in zip(xi, eta)])
-    dirichlet_dX = np.array([dirichletBoundaryDerivativeX(x, y) for x, y in zip(xi, eta)])
-    dirichlet_dY = np.array([dirichletBoundaryDerivativeY(x, y) for x, y in zip(xi, eta)])
-    fi_vals = np.array([load_function(x, y) for x, y in zip(xi, eta)])
-
-    # Vectorized iteration over Gauss points
-    for idx in range(4):
-        d = d_[idx]
-        if d < 0:
-            continue  # Skip negative distances
-
-        dx, dy = dx_[idx], dy_[idx]
-        bxi, beta = bxi_[idx], beta_[idx]
-        dbdxi, dbdeta = dbdxi_[idx], dbdeta_[idx]
-
-        # Calculate corrections for basis function pairs
-        for xbasisi in range(i - p, i + 1):
-            for ybasisi in range(j - q, j + 1):
-                Ni = beta[ybasisi] * bxi[xbasisi]
-                dNidxi = dbdxi[xbasisi] * beta[ybasisi]
-                dNidEta = bxi[xbasisi] * dbdeta[ybasisi]
-
-                # Corrections
-                diCorrXi = dNidxi * d + dx * Ni
-                diCorrEta = dNidEta * d + dy * Ni
-                K_idx_i = (p + 1) * (xbasisi - (i - p)) + (ybasisi - (j - q))
-
-                # Update F vector in a fully vectorized way
-                F[K_idx_i] += (
-                    fi_vals[idx] * d * Ni
-                    + diCorrXi * (dx * dirichlet_vals[idx] + d * dirichlet_dX[idx])
-                    + diCorrEta * (dy * dirichlet_vals[idx] + d * dirichlet_dY[idx])
-                    - dirichlet_dX[idx] * diCorrXi
-                    - dirichlet_dY[idx] * diCorrEta
-                )
-
-                # Vectorized update of K matrix
-                for xbasisj in range(i - p, i + 1):
-                    for ybasisj in range(j - q, j + 1):
-                        dNjdxi = dbdxi[xbasisj] * beta[ybasisj]
-                        dNjdeta = bxi[xbasisj] * dbdeta[ybasisj]
-                        Nj = beta[ybasisj] * bxi[xbasisj]
-
-                        djCorrXi = dNjdxi * d + dx * Nj
-                        djCorrEta = dNjdeta * d + dy * Nj
-
-                        # Direct indexing into K
-                        K[K_idx_i, (p + 1) * (xbasisj - (i - p)) + (ybasisj - (j - q))] += (
-                            diCorrXi * djCorrXi + diCorrEta * djCorrEta
-                        )
-    
-    return K, F
-
 def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta):
-    
-    g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
-    w = np.array([1,1])
+    if p <=2:
+        g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
+        w = np.array([1,1])
+        gaussP_x = np.array([g[0],g[0],g[1],g[1]])
+        gaussP_y = np.array([g[0],g[1],g[0],g[1]])
+        gauss_weights = np.array([w[0],w[0],w[1],w[1]])
+        num_gauss_points = 4
+    else:
+        g = np.array([-math.sqrt(3/5), 0, math.sqrt(3/5)])
+        w = np.array([5/9, 8/9, 5/9])
+        gaussP_x = np.array([g[0],g[0],g[0],g[1],g[1],g[1],g[2],g[2],g[2]])
+        gaussP_y = np.array([g[0],g[1],g[2],g[0],g[1],g[2],g[0],g[1],g[2]])
+        gauss_weights = np.array([w[0]*w[0],w[1]*w[0],w[2]*w[0],w[0]*w[1],w[1]*w[1],w[2]*w[1],w[0]*w[2],w[1]*w[2],w[2]*w[2]])
+        num_gauss_points = 9
+
     K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
     F = np.zeros((p+1)*(q+1))
     Bspxi = Bspline(knotvector_x,p)
     Bspeta = Bspline(knotvector_y,q)
-    gaussP_x = np.array([g[0],g[0],g[1],g[1]])
-    gaussP_y = np.array([g[0],g[1],g[0],g[1]])
+    
     xi = (x2-x1)/2 * gaussP_x + (x2+x1)/2
     eta = (y2-y1)/2 * gaussP_y + (y2+y1)/2
 
-    d_,dx_,dy_ = mesh.distance_with_derivative_vect(xi,eta,model)
+    d_,dx_,dy_ = mesh.distance_with_derivative_vect_trasformed(xi,eta,model)
     bxi_ = Bspxi.collmat(xi)
     beta_ = Bspeta.collmat(eta)
     dbdxi_ = Bspxi.collmat(xi,1)
     dbdeta_ = Bspeta.collmat(eta,1)
-    for idx in range(4): #iterate throug Gauss points functions in x 
+    for idx in range(num_gauss_points): #iterate throug Gauss points functions in x
             #d = mesh.distanceFromContur(xi,eta,model)
             d = d_[idx].item()
             if d<0: continue
@@ -301,99 +200,17 @@ def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,
                             #correction with the distance function
                             djCorrXi = dNjdxi*d + dx * Nj
                             djCorrEta = dNjdeta*d + dy * Nj
-                            #! In the line below the weigths have been taken out
-                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += (((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta)))
+                            #Not anymore: In the line below the weigths have been taken out
+                            K[(p+1)*(xbasisi-(i-p)) + ybasisi-(j-q)][(p+1)*(xbasisj-(i-p))+(ybasisj-(j-q))] += (((diCorrXi)*(djCorrXi) + (diCorrEta)*(djCorrEta)))*gauss_weights[idx]
                     fi = load_function(xi[idx], eta[idx])
                     Ni_corr = d*Ni
                     dirichlet_xi_eta = dirichletBoundary(xi[idx],eta[idx])
                     Ddirichlet_X = dirichletBoundaryDerivativeX(xi[idx],eta[idx])
                     Ddirichlet_Y = dirichletBoundaryDerivativeY(xi[idx],eta[idx])
-                    #! In the line below the weigths have been taken out
-                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += (fi*Ni_corr + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))
+                    # Not anymore: In the line below the weigths have been taken out
+                    F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += (fi*Ni_corr + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))* gauss_weights[idx]
     return K,F
-def GaussQuadrature_opt(model, x1, x2, y1, y2, r, i, j, p, q, knotvector_x, knotvector_y):
-    g = np.array([-1 / math.sqrt(3), 1 / math.sqrt(3)])  # Gauss points
-    w = np.array([1, 1])  # Weights
-    K = np.zeros(((p + 1) * (q + 1), (p + 1) * (q + 1)))
-    F = np.zeros((p + 1) * (q + 1))
 
-    # Calculate xi and eta for all combinations of Gauss points
-    gpx = (x2 - x1) / 2 * g[:, None] + (x2 + x1) / 2  # Shape: (2, 1)
-    gpy = (y2 - y1) / 2 * g + (y2 + y1) / 2  # Shape: (2,)
-
-    # Prepare for distance calculations
-    points = np.array(np.meshgrid(gpx.flatten(), gpy.flatten())).T.reshape(-1, 2)
-    
-    # Calculate distances and derivatives
-    d, dx, dy = mesh.distance_with_derivative(points[:, 0].T, points[:, 1].T, model)
-
-    # Reshape d, dx, dy to 2x2 for processing
-    d = d.reshape(2, 2)
-    dx = dx.reshape(2, 2)
-    dy = dy.reshape(2, 2)
-
-    # Mask for valid distances
-    valid_mask = d >= 0
-
-    # Calculate basis functions and their derivatives for valid points
-    xbasis_indices = np.arange(i - p, i + 1)
-    ybasis_indices = np.arange(j - q, j + 1)
-
-    # Vectorize B-spline calculations
-    N_x = np.array([[B(gpy[jj], q, ybasisi, knotvector_y) for jj in range(2)] for ybasisi in ybasis_indices])
-    N_y = np.array([[B(gpx[ii], p, xbasisi, knotvector_x) for ii in range(2)] for xbasisi in xbasis_indices])
-
-    for idxx in range(2):  # Loop through Gauss points in x direction
-        for idxy in range(2):  # Loop through Gauss points in y direction
-            if not valid_mask[idxx, idxy]:
-                continue  # Skip invalid points
-
-            xi, eta = gpx[idxx, 0], gpy[idxy]
-
-            # dNdxi and dNidEta
-            test = dBdXi(xi, p, xbasis_indices[:, None], knotvector_x)
-            dNidxi =  test* N_y[idxy]
-            dNidEta = N_x[idxx] * dBdXi(eta, q, ybasis_indices, knotvector_y)
-
-            Ni = N_x[idxx] * N_y[idxy]
-
-            # Calculate corrections
-            diCorrXi = dNidxi * d[idxx, idxy] + dx[idxx, idxy] * Ni
-            diCorrEta = dNidEta * d[idxx, idxy] + dy[idxx, idxy] * Ni
-
-            for xbasisj in range(i - p, i + 1):
-                for ybasisj in range(j - q, j + 1):
-                    Nj = N_x[idxy] * N_y[idxx]  # Vectorized basis function
-                    dNjdxi = dBdXi(xi, p, xbasisj, knotvector_x) * N_y[ybasisj]
-                    dNjdeta = N_x[ybasisj] * dBdXi(eta, q, ybasisj, knotvector_y)
-
-                    # Correction for the distance function
-                    djCorrXi = dNjdxi * d[idxx, idxy] + dx[idxx, idxy] * Nj
-                    djCorrEta = dNjdeta * d[idxx, idxy] + dy[idxx, idxy] * Nj
-
-                    K[(p + 1) * (xbasis_indices[0] - (i - p)) + (ybasis_indices[0] - (j - q))][
-                        (p + 1) * (xbasis_indices[0] - (i - p)) + (ybasis_indices[0] - (j - q))] += (
-                            w[idxx] * w[idxy] * (
-                                (diCorrXi * djCorrXi + diCorrEta * djCorrEta))
-                        )
-
-            fi = load_function(xi, eta)
-            Ni_corr = d[idxx, idxy] * Ni
-            dirichlet_xi_eta = dirichletBoundary(xi, eta)
-            Ddirichlet_X = dirichletBoundaryDerivativeX(xi, eta)
-            Ddirichlet_Y = dirichletBoundaryDerivativeY(xi, eta)
-
-            # Update F
-            F[(p + 1) * (xbasis_indices[0] - i + p) + (ybasis_indices[0] - j + q)] += (
-                w[idxx] * w[idxy] * (
-                    fi * Ni_corr  +
-                    (diCorrXi * (dx * dirichlet_xi_eta + d[idxx, idxy] * Ddirichlet_X) +
-                     diCorrEta * (dy * dirichlet_xi_eta + d[idxx, idxy] * Ddirichlet_Y)) -
-                    (Ddirichlet_X * diCorrXi + Ddirichlet_Y * diCorrEta)
-                )
-            )
-
-    return K, F
 def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts,etype=None):
     assert not Nurbs_fun
     x1 = knotvector_x[i]
@@ -503,7 +320,7 @@ def visualizeResultsBspline(model,results,p,q,knotvector_x, knotvector_y,surface
             sum = 0
             xPoints.append(xx)
             yPoints.append(yy)
-            d = mesh.distanceFromContur(xx,yy,model).detach().numpy()
+            d = mesh.distanceFromContur(xx,yy,model)
             analitical.append(solution_function(xx,yy) if d>=0 else 0)
             
             for xbasis in range(len(knotvector_x)-p-1):
@@ -610,7 +427,7 @@ def plotResultHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain 
     for idxx,xx in enumerate(x):
         for idxy, yy in enumerate(y):
             sum = 0
-            d = mesh.distanceFromContur(xx,yy,model).detach().numpy()
+            d = mesh.distanceFromContur(xx,yy,model)
             Z_A[idxx,idxy] = solution_function(xx,yy) if d>=0 else 0
             
             for xbasis in range(len(knotvector_x)-p-1):

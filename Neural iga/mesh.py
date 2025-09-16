@@ -3,9 +3,11 @@ from NURBS import Surface, plot_surface
 from math import sqrt
 import matplotlib.pyplot as plt
 import torch
+from NeuralImplicit import Siren
 
 EPS = 0.9
 USE_SIGMOID_FOR_DISTANCE = False
+TRANSFORM = None  # Options: "sigmoid", "tanh", None
 
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     assert x0 < x1 and y0 < y1
@@ -44,9 +46,17 @@ def getDefaultValues(div=2,order=1,delta = 0,larger_domain = True):
     xDivision = div
     yDivision = div
     return x0, y0,x1,y1,xDivision,yDivision,p,q
-def distanceFromContur(x,y,model):
+def distanceFromContur(x,y,model,transform=TRANSFORM):
     crd = torch.tensor([x,y],requires_grad=False,dtype=torch.float32)
     d = model(crd)
+    if transform == "sigmoid":
+        d = sigmoid(d).item()
+    elif transform == "tanh":
+        d = torch.tanh(d).item()
+    elif transform == "logarithmic":
+        d = logarithmic(d).item()
+    elif transform == "exponential":
+        d = exponential(d).item()
     return d
 def dddx(x,y,model):
     crd = torch.tensor([x,y],requires_grad=True,dtype=torch.float32)
@@ -62,27 +72,59 @@ def dddy(x,y, model):
     dx = crd.grad[1].item()
     crd.grad.zero_()
     return dx 
-def distance_with_derivative(x,y,model):
+def distance_with_derivative(x,y,model,transform=TRANSFORM):
     crd = torch.tensor([x,y],requires_grad=True,dtype=torch.float32)
     d = model(crd)
     d.backward()
     dx = crd.grad[0].item()
     dy = crd.grad[1].item()
     crd.grad.zero_()
+    if transform == "sigmoid":
+        dx = sigmoid_derivative(d) * dx
+        dy = sigmoid_derivative(d) * dy
+        d = sigmoid(d).item()
+    elif transform == "tanh":
+        d = torch.tanh(d).item()
+        dx = (1 - d**2) * dx
+        dy = (1 - d**2) * dy
     return d,dx,dy
-def distance_with_derivative_vect(x,y,model):
+def distance_with_derivative_vect_trasformed(x,y,model,transform=TRANSFORM):
     crd = torch.tensor(np.array([x,y]),dtype=torch.float32).T
     crd.requires_grad = True
     d = model(crd)
     grds = torch.autograd.grad(outputs=d, inputs=crd, grad_outputs=torch.ones_like(d),retain_graph=True)
     dx = grds[0][:,0]
     dy = grds[0][:,1]
+    if transform == "sigmoid":
+        dx = sigmoid_derivative(d).view(-1) * dx
+        dy = sigmoid_derivative(d).view(-1) * dy
+        d = sigmoid(d)
+    elif transform == "tanh":
+        d = torch.tanh(d)
+        dx = (1 - d**2).view(-1) * dx
+        dy = (1 - d**2).view(-1) * dy
+    elif transform == "logarithmic":
+        dx = (1 / (d + 1)).view(-1) * dx
+        dy = (1 / (d + 1)).view(-1) * dy
+        d = logarithmic(d)
+    elif transform == "exponential":
+        dx = torch.exp(d).view(-1) * dx
+        dy = torch.exp(d).view(-1) * dy
+        d = exponential(d)
     #crd.grad.zero_()
     return d,dx,dy
 def sigmoid(x):
-    return 1.0 / (1.0 + np.exp(-x))
+    return 1.0 / (1.0 + torch.exp(-x))
+
 def sigmoid_derivative(x):
-    return sigmoid(x)*(1-sigmoid(x))
+    s = sigmoid(x)
+    tmp = torch.ones_like(s) - s
+    tmp2 = s * (torch.ones_like(s) - s)
+    return tmp2
+def logarithmic(x):
+    return torch.log(x + 1)
+def exponential(x):
+    return torch.exp(x) - 1
 def plotMesh(xdiv=2, ydiv=3,delta=0):
     circle = plt.Circle((0, 0), 1, color='r')
     fig, ax = plt.subplots()
@@ -136,23 +178,32 @@ def plotAlayticHeatmap(solfun,n=10):
     plt.grid(False)
     plt.show()
 if __name__ == "__main__":
-    plotDisctancefunction()
-    plotMesh(1,1,0.1)
-    x0 = -1
-    x1 = 1
-    y0 = -1
-    y1 = 1
-    p = 1
-    q = 1
-    xDivision = 5
-    yDivision = 5
-    knotvector_u, knotvector_w, weights, ctrlpts = generateRectangularMesh(x0,y0,x1,y1,xDivision,yDivision,p,q)
-    k = len(knotvector_u)-p-1
-    l = len(knotvector_w)-q-1
-    y = np.linspace(y0,y1,10)
-    x = np.linspace(x0,x1,10)
-    surfacepoints = []
-    for yy in y:
-        surf = [Surface(k,l,xx,yy,weights,knotvector_u,knotvector_w,p,q,ctrlpts) for xx in x]
-        surfacepoints.append(surf)
-    plot_surface(surfacepoints,ctrlpts)
+    # Import the SIREN model from main.py
+
+    # Instantiate the SIREN model (adjust input/output dims as needed)
+   
+    siren_model_kor_jo = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
+    siren_model_kor_jo.load_state_dict(torch.load('siren_model_kor_jo.pth',weights_only=True,map_location=torch.device('cpu')))
+    siren_model_kor_jo.eval()  # Set to eval mode
+
+    x_values = np.linspace(-1, 1, 100)
+    y_values = np.linspace(-1, 1, 100)
+    X, Y = np.meshgrid(x_values, y_values)
+    points = np.stack([X.ravel(), Y.ravel()], axis=1)
+
+    # SIREN expects input shape (N, 2)
+    with torch.no_grad():
+        d, dx, dy = distance_with_derivative_vect_trasformed(points[:,0], points[:,1], siren_model_kor_jo)
+        D = d.numpy().reshape(X.shape)
+        DX = dx.numpy().reshape(X.shape)
+        DY = dy.numpy().reshape(X.shape)
+
+    plt.figure(figsize=(8,6))
+    plt.contourf(X, Y, D, levels=50, cmap='coolwarm')
+    plt.colorbar(label='Distance')
+    plt.quiver(X, Y, DX, DY, color='k', scale=50)
+    plt.title('Distance Function and Gradient Field (SIREN)')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.axis('equal')
+    plt.show()

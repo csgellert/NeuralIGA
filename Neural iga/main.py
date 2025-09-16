@@ -25,10 +25,12 @@ siren_model_L_shape.eval()
 siren_model_L_shape2 = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
 siren_model_L_shape2.load_state_dict(torch.load('siren_model_L-shape_qvad.pth',weights_only=True,map_location=torch.device('cpu')))
 siren_model_L_shape2.eval()
-model = siren_model
+analitical_model = Geomertry.AnaliticalDistanceCircle()
+analitical_model2 = Geomertry.AnaliticalDistanceLshape()
+model = analitical_model2
 r=1
 #defining geometry:
-default = mesh.getDefaultValues(div=1,order=1,delta=0.005,larger_domain=True)
+default = mesh.getDefaultValues(div=5,order=2,delta=0.005,larger_domain=FEM.LARGER_DOMAIN)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
 assert p==q and xDivision == yDivision
@@ -36,7 +38,7 @@ x = np.linspace(x0,x1,10)
 y = np.linspace(y0,y1,10)
 NControl_u = len(knotvector_u)-p-1
 NControl_w = len(knotvector_w)-q-1
-mesh.plotMesh(xDivision,yDivision,delta=0.005)
+#mesh.plotMesh(xDivision,yDivision,delta=0.005)
 #mesh.plotAlayticHeatmap(FEM.solution_function)
 Geomertry.init_spl(x,p,None,knotvector_u)
 
@@ -59,11 +61,12 @@ start = time.time()
 print("Solving equation")
 result = FEM.solveWeak(K,F)
 print(f"Calculation time: {time.time()-start} ms")
+print(f"p={p}\tdiv = {xDivision}")
 #FEM.plotErrorHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=False,N=40)
-FEM.plotResultHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=True,N=500)
+#FEM.plotResultHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=FEM.LARGER_DOMAIN,N=50)
 
 
-FEM.visualizeResultsBspline(model,result,p,q,knotvector_u,knotvector_w,None,larger_domain=True)
+FEM.visualizeResultsBspline(model,result,p,q,knotvector_u,knotvector_w,None,larger_domain=FEM.LARGER_DOMAIN)
 
 
 

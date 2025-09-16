@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 import datetime
+import Geomertry
 
 class NeuralNetwork(nn.Module):
     def __init__(self, input_size=2, hidden_size=10, num_hidden_layers=1, output_size=1):
@@ -266,3 +267,45 @@ def plotDisctancefunction(eval_fun, N=500,contour = False):
     plt.title('Scalar-Valued Function f(x, y)')
     plt.grid(True)
     plt.show()
+
+def load_models(model_type="siren_model"):
+    """options: siren_model, siren_model_kor_jo, siren_model_L-shape, siren_model_L-shape_qvad,siren_model_euk, analitical_model, analitical_model2"""
+    print(f"Loading model: {model_type}")
+
+    # Load the model
+    #relu_model = NeuralNetwork(2,256,2,1)
+    #relu_model.load_state_dict(torch.load('relu_model_last.pth',weights_only=True,map_location=torch.device('cpu')))
+    #relu_model.eval()
+    if model_type == "siren_model":
+        model = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
+        model.load_state_dict(torch.load('./models/siren_model_last.pth',weights_only=True,map_location=torch.device('cpu')))
+        model.eval()
+        return model
+    elif model_type == "siren_model_kor_jo":
+        model = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
+        model.load_state_dict(torch.load('./models/siren_model_kor_jo.pth',weights_only=True,map_location=torch.device('cpu')))
+        model.eval()
+        return model
+    elif model_type == "siren_model_euk":
+        model = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
+        model.load_state_dict(torch.load('./models/siren_model_euk_last.pth',weights_only=True,map_location=torch.device('cpu')))
+        model.eval()
+        return model
+    elif model_type == "siren_model_L-shape":
+        model = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
+        model.load_state_dict(torch.load('./models/siren_model_L-shape.pth',weights_only=True,map_location=torch.device('cpu')))
+        model.eval()
+        return model
+    elif model_type == "siren_model_L-shape_qvad":
+        model = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
+        model.load_state_dict(torch.load('./models/siren_model_L-shape_qvad.pth',weights_only=True,map_location=torch.device('cpu')))
+        model.eval()
+        return model
+    elif model_type == "analitical_model":
+        model = Geomertry.AnaliticalDistanceCircle()
+        return model
+    elif model_type == "analitical_model2":
+        model = Geomertry.AnaliticalDistanceLshape()
+        return model
+    else:
+        raise NotImplementedError("Model not implemented")

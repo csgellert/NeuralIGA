@@ -1,6 +1,4 @@
 import numpy as np
-from NURBS import Surface, plot_surface
-from math import sqrt
 import matplotlib.pyplot as plt
 import torch
 from NeuralImplicit import Siren

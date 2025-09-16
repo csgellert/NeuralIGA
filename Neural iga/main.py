@@ -1,36 +1,22 @@
-import NURBS
 import numpy as np
 import FEM
 import mesh
 from tqdm import tqdm
 import time
-import torch
-from NeuralImplicit import NeuralNetwork, Siren
+import NeuralImplicit 
 import cProfile
-from pstats import Stats, SortKey
+from pstats import Stats
 import Geomertry
-# Load the model
-#relu_model = NeuralNetwork(2,256,2,1)
-#relu_model.load_state_dict(torch.load('relu_model_last.pth',weights_only=True,map_location=torch.device('cpu')))
-#relu_model.eval()
-siren_model = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
-siren_model.load_state_dict(torch.load('siren_model_last.pth',weights_only=True,map_location=torch.device('cpu')))
-siren_model.eval()
-siren_model_kor_jo = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
-siren_model_kor_jo.load_state_dict(torch.load('siren_model_kor_jo.pth',weights_only=True,map_location=torch.device('cpu')))
-siren_model_kor_jo.eval()
-siren_model_L_shape = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
-siren_model_L_shape.load_state_dict(torch.load('siren_model_L-shape.pth',weights_only=True,map_location=torch.device('cpu')))
-siren_model_L_shape.eval()
-siren_model_L_shape2 = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
-siren_model_L_shape2.load_state_dict(torch.load('siren_model_L-shape_qvad.pth',weights_only=True,map_location=torch.device('cpu')))
-siren_model_L_shape2.eval()
-analitical_model = Geomertry.AnaliticalDistanceCircle()
-analitical_model2 = Geomertry.AnaliticalDistanceLshape()
-model = analitical_model2
+
+model = NeuralImplicit.load_models("siren_model")
 r=1
+DIVISIONS = 5
+ORDER = 2
+DELTA = 0.005
+
+
 #defining geometry:
-default = mesh.getDefaultValues(div=5,order=2,delta=0.005,larger_domain=FEM.LARGER_DOMAIN)
+default = mesh.getDefaultValues(div=DIVISIONS,order=ORDER,delta=DELTA,larger_domain=FEM.LARGER_DOMAIN)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
 assert p==q and xDivision == yDivision

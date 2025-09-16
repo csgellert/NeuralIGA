@@ -1,3 +1,0 @@
-2024-10-09: Star shape: ReLu -model 2-256-256-1: loss:0.00002881   -->Optimizer: Adam lr=1e-3
-2024-10-09: Star shape: Softplus model 2-256-256-1 loss: 0.00002647 -->Optimizer: Adam lr=1e-3
-2024-10-09: Star shape: Siren-model 2-256-256-1 loss: 0.00000542 -->opimizer: Adam lr=1e-3

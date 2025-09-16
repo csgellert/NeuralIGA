@@ -1,41 +1,13 @@
-import NURBS
 import numpy as np
 import FEM
 import mesh
 from tqdm import tqdm
-import time
-import torch 
-from NeuralImplicit import NeuralNetwork, Siren
 import matplotlib.pyplot as plt
-from math import pi,sin,cos
 import Geomertry
+import NeuralImplicit
 
-# def loadfunction(x,y):
-#     #return 2-(x**2 + y**2)
-#     return - pi**2 /2 *cos(pi*x/2)*cos(pi*y/2)
-# def solutionfunction(x,y):
-#     return cos(pi*x/2)*cos(pi*y/2)
-#relu_model = NeuralNetwork(2,256,2,1)
-#print(sum(p.numel() for p in relu_model.parameters() if p.requires_grad))
-#relu_model.load_state_dict(torch.load('relu_model_last.pth',weights_only=True,map_location=torch.device('cpu')))
-#relu_model.eval()#not evaluated
-siren_model = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
-siren_model.load_state_dict(torch.load('siren_model_last.pth',weights_only=True,map_location=torch.device('cpu')))
-siren_model.eval()#v0
-siren_model_euk = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
-siren_model_euk.load_state_dict(torch.load('siren_model_euk_last.pth',weights_only=True,map_location=torch.device('cpu')))
-siren_model_euk.eval()#v1
-siren_model_kor_jo = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
-siren_model_kor_jo.load_state_dict(torch.load('siren_model_kor_jo.pth',weights_only=True,map_location=torch.device('cpu')))
-siren_model_kor_jo.eval()#euk
-siren_model_L_shape = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
-siren_model_L_shape.load_state_dict(torch.load('siren_model_L-shape.pth',weights_only=True,map_location=torch.device('cpu')))
-siren_model_L_shape.eval()
-siren_model_L_shape2 = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
-siren_model_L_shape2.load_state_dict(torch.load('siren_model_L-shape_qvad.pth',weights_only=True,map_location=torch.device('cpu')))
-siren_model_L_shape2.eval()
-analitical_model = Geomertry.AnaliticalDistanceLshape()
-model = analitical_model
+model = NeuralImplicit.load_models("analitical_model")
+model = model
 
 r=1
 

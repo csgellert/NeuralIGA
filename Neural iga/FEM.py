@@ -1,4 +1,3 @@
-from NURBS import *
 from Geomertry import *
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,8 +5,9 @@ import mesh
 import math
 import torch
 import numpy as np
-FUNCTION_CASE = 5
+FUNCTION_CASE = 2
 LARGER_DOMAIN = FUNCTION_CASE <=4 # if True, the domain is [-1,1]x[-1,1], otherwise [0,1]x[0,1]
+print(f"Larger domain: {LARGER_DOMAIN}")
 MAX_SUBDIVISION = 4
 def load_function(x,y):
     #! -f(x)

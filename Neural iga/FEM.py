@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 import mesh
 import math
 import torch
-import numpy as np
+from bspline import Bspline
+
 FUNCTION_CASE = 2
 LARGER_DOMAIN = FUNCTION_CASE <=4 # if True, the domain is [-1,1]x[-1,1], otherwise [0,1]x[0,1]
 print(f"Larger domain: {LARGER_DOMAIN}")
@@ -67,7 +68,7 @@ def dirichletBoundaryDerivativeY(x,y):
         return 0
     else: raise NotImplementedError
 
-def elemantBspline(model,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts,Bspxi,Bspeta):
+def element(model,p,q,knotvector_x, knotvector_y,i,j,Bspxi,Bspeta):
     assert q==p
     SUBDIVISION = 1
     DOSUBDIV = True
@@ -84,7 +85,7 @@ def elemantBspline(model,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nCont
     if DOSUBDIV:
         K,F = Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,level=0,MAXLEVEL=0)
     return K,F
-def boundaryElementBspline(model,r,p,q,knotvector_x, knotvector_y,i,j,nControlx, nControly,Bspxi,Bspeta):
+def boundaryElement(model,p,q,knotvector_x, knotvector_y,i,j,Bspxi,Bspeta):
     assert q==p
     SUBDIVISION = 1
     DOSUBDIV = True
@@ -106,22 +107,21 @@ def Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,l
     halfy = (y1+y2)/2
     K = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
     F = np.zeros((p+1)*(q+1))
-    r=1 #! Ez hardcodolva van!!!
     if level == MAXLEVEL:
         #first
-        Ks,Fs = GaussQuadrature(model,x1, halfx,y1,halfy,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta)
+        Ks,Fs = GaussQuadrature(model,x1, halfx,y1,halfy,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta)
         K+=Ks/4
         F+=Fs/4
         #second
-        Ks,Fs = GaussQuadrature(model,halfx, x2,y1,halfy,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta)
+        Ks,Fs = GaussQuadrature(model,halfx, x2,y1,halfy,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta)
         K+=Ks/4
         F+=Fs/4
         #third
-        Ks,Fs = GaussQuadrature(model,x1, halfx,halfy,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta)
+        Ks,Fs = GaussQuadrature(model,x1, halfx,halfy,y2,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta)
         K+=Ks/4
         F+=Fs/4
         #fourth
-        Ks,Fs = GaussQuadrature(model,halfx, x2,halfy,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta)
+        Ks,Fs = GaussQuadrature(model,halfx, x2,halfy,y2,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta)
         K+=Ks/4
         F+=Fs/4
         return K,F
@@ -140,11 +140,7 @@ def Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,l
         F+=Fret/4
         return K,F
 
-from bspline import Bspline
-import numpy as np
-import math
-
-def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta):
+def GaussQuadrature(model,x1,x2,y1,y2,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta):
     if p <=2:
         g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
         w = np.array([1,1])
@@ -211,8 +207,7 @@ def GaussQuadrature(model,x1,x2,y1,y2,r,i,j,p,q,knotvector_x,knotvector_y,Bspxi,
                     F[(p+1)*(xbasisi-i+p) + ybasisi-j+q] += (fi*Ni_corr + (diCorrXi*(dx*dirichlet_xi_eta+d*Ddirichlet_X) + diCorrEta*(dy*dirichlet_xi_eta+d*Ddirichlet_Y)) - (Ddirichlet_X*diCorrXi + Ddirichlet_Y*diCorrEta))* gauss_weights[idx]
     return K,F
 
-def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts,etype=None):
-    assert not Nurbs_fun
+def elementChoose(model,p,q,knotvector_x, knotvector_y,i,j,etype=None):
     x1 = knotvector_x[i]
     x2 = knotvector_x[i+1]
     y1 = knotvector_y[j]
@@ -233,9 +228,8 @@ def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nCont
     if innerElement: #regular element
         Bspxi = Bspline(knotvector_x,p)
         Bspeta = Bspline(knotvector_y,q)
-        #Ke, Fe = elemantBspline(p,q,knotvector_x, knotvector_y, None,i,j,nControlx, nControly,weigths,ctrlpts)
         if etype is not None: etype["inner"] +=1
-        Ke, Fe = elemantBspline(model,p,q,knotvector_x, knotvector_y, ed,i,j,nControlx, nControly,weigths,ctrlpts,Bspxi,Bspeta)
+        Ke, Fe = element(model,p,q,knotvector_x, knotvector_y,i,j,Bspxi,Bspeta)
     elif outerElement:
         Ke = np.zeros(((p+1)*(q+1),(p+1)*(q+1)))
         Fe = np.zeros((p+1)*(q+1))
@@ -243,11 +237,11 @@ def elementChoose(model,Nurbs_fun,r,p,q,knotvector_x, knotvector_y, ed,i,j,nCont
     else:
         Bspxi = Bspline(knotvector_x,p)
         Bspeta = Bspline(knotvector_y,q)
-        Ke, Fe = boundaryElementBspline(model,r,p,q,knotvector_x, knotvector_y,i,j,nControlx, nControly,Bspxi,Bspeta)
+        Ke, Fe = boundaryElement(model,p,q,knotvector_x, knotvector_y,i,j,Bspxi,Bspeta)
         if etype is not None: etype["boundary"] +=1
     if etype is not None: return Ke, Fe, etype
     return Ke, Fe
-def elementTypeChoose(r,knotvector_x, knotvector_y,i,j,etype=None):
+def elementTypeChoose(knotvector_x, knotvector_y,i,j,etype=None):
     x1 = knotvector_x[i]
     x2 = knotvector_x[i+1]
     y1 = knotvector_y[j]
@@ -482,6 +476,6 @@ if __name__ == "__main__":
             assert p==q and xDivision == yDivision
             for elemx in range(p,p+xDivision+1):
                 for elemy in range(q,q+xDivision+1):
-                    etype = elementTypeChoose(1,knotvector_u,knotvector_w,elemx,elemy,etype)
+                    etype = elementTypeChoose(knotvector_u,knotvector_w,elemx,elemy,etype)
             etypes.append(etype)
     print(etypes)

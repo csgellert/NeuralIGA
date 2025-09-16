@@ -35,7 +35,7 @@ for order in orders:
         F = np.zeros((xDivision+p+1)*(yDivision+q+1))
         for elemx in tqdm(range(p,p+xDivision+1)):
             for elemy in range(q,q+xDivision+1):
-                Ke,Fe,etype = FEM.elementChoose(model,False,r,p,q,knotvector_u,knotvector_w,None,elemx,elemy,NControl_u,NControl_w,weigths,None,etype)
+                Ke,Fe,etype = FEM.elementChoose(model,p,q,knotvector_u,knotvector_w,elemx,elemy,etype)
                 K,F = FEM.assembly(K,F,Ke,Fe,elemx,elemy,p,q,xDivision,yDivision)
         #print(dirichlet)
         result = FEM.solveWeak(K,F)

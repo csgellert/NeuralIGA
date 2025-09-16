@@ -34,7 +34,7 @@ print("Initialisation finished")
 with cProfile.Profile() as pr:
     for elemx in tqdm(range(p,p+xDivision+1)):
         for elemy in range(q,q+xDivision+1):
-            Ke,Fe = FEM.elementChoose(model,False,r,p,q,knotvector_u,knotvector_w,None,elemx,elemy,NControl_u,NControl_w,weigths,None)
+            Ke,Fe = FEM.elementChoose(model,p,q,knotvector_u,knotvector_w,elemx,elemy,None)
             K,F = FEM.assembly(K,F,Ke,Fe,elemx,elemy,p,q,xDivision,yDivision)
 with open('profiling_stats.txt', 'w') as stream:
     stats = Stats(pr, stream=stream)

@@ -5,8 +5,9 @@ from NeuralImplicit import Siren
 
 EPS = 0.9
 USE_SIGMOID_FOR_DISTANCE = False
-TRANSFORM = None  # Options: "sigmoid", "tanh", None
-
+TRANSFORM = None#"trapezoid"  # Options: "sigmoid", "tanh", None
+if TRANSFORM == "trapezoid": raise NameError("Trapezoid transform is not recommended, use sigmoid or tanh instead")
+TANG = 2  # Used for trapezoid transform, adjust as needed
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     assert x0 < x1 and y0 < y1
     knotvector_u = np.linspace(x0,x1,xDivision+2)
@@ -55,8 +56,10 @@ def distanceFromContur(x,y,model,transform=TRANSFORM):
         d = logarithmic(d).item()
     elif transform == "exponential":
         d = exponential(d).item()
+    elif transform == "trapezoid":
+        d = torch.where(d * TANG < 1, d * TANG, 1)
     return d
-def dddx(x,y,model):
+"""def dddx(x,y,model):
     crd = torch.tensor([x,y],requires_grad=True,dtype=torch.float32)
     d = model(crd)
     d.backward()
@@ -70,6 +73,7 @@ def dddy(x,y, model):
     dx = crd.grad[1].item()
     crd.grad.zero_()
     return dx 
+"""
 def distance_with_derivative(x,y,model,transform=TRANSFORM):
     crd = torch.tensor([x,y],requires_grad=True,dtype=torch.float32)
     d = model(crd)
@@ -85,6 +89,11 @@ def distance_with_derivative(x,y,model,transform=TRANSFORM):
         d = torch.tanh(d).item()
         dx = (1 - d**2) * dx
         dy = (1 - d**2) * dy
+    elif transform == "trapezoid":
+        d = torch.where(d * TANG < 1, d * TANG, 1)
+        mask = d.squeeze()*TANG > 1
+        dx = torch.where(mask, torch.tensor(0.0), dx * TANG)
+        dy = torch.where(mask, torch.tensor(0.0), dy * TANG)
     return d,dx,dy
 def distance_with_derivative_vect_trasformed(x,y,model,transform=TRANSFORM):
     crd = torch.tensor(np.array([x,y]),dtype=torch.float32).T
@@ -109,6 +118,13 @@ def distance_with_derivative_vect_trasformed(x,y,model,transform=TRANSFORM):
         dx = torch.exp(d).view(-1) * dx
         dy = torch.exp(d).view(-1) * dy
         d = exponential(d)
+    elif transform == 'trapezoid':
+        
+        d = torch.where(d * TANG < 1, d * TANG, 1)
+        mask = d.squeeze()*TANG > 1
+        dx = torch.where(mask, torch.tensor(0.0), dx * TANG)
+        dy = torch.where(mask, torch.tensor(0.0), dy * TANG)
+
     #crd.grad.zero_()
     return d,dx,dy
 def sigmoid(x):
@@ -135,15 +151,16 @@ def plotMesh(xdiv=2, ydiv=3,delta=0):
     
     plt.grid(True)
     plt.show()
-def plotDisctancefunction():
-    x_values = np.linspace(0, 1.1, 1000)
-    y_values = np.linspace(0, 1.1, 1000)
+def plotDisctancefunction(model):
+    N = 200
+    x_values = np.linspace(-1.1, 1.1, N)
+    y_values = np.linspace(-1.1, 1.1, N)
     X, Y = np.meshgrid(x_values, y_values)
-    Z = np.zeros((1000,1000))
+    Z = np.zeros((N,N))
     # Evaluate the function at each point in the grid
     for idxx, xx in enumerate(x_values):
         for idxy,yy in enumerate(y_values):
-            Z[idxy, idxx] = distanceFromContur(xx,yy)
+            Z[idxy, idxx] = distanceFromContur(xx,yy,model)
 
     #Z = distanceFromContur(X, Y)
 
@@ -154,6 +171,8 @@ def plotDisctancefunction():
     plt.ylabel('y')
     plt.title('Scalar-Valued Function f(x, y)')
     plt.grid(True)
+    highlight_level = 0.0
+    plt.contour(X, Y, Z, levels=[highlight_level], colors='red')
     plt.show()
 def plotAlayticHeatmap(solfun,n=10):
     x_values = np.linspace(-1.1, 1.1, 1000)
@@ -181,7 +200,7 @@ if __name__ == "__main__":
     # Instantiate the SIREN model (adjust input/output dims as needed)
    
     siren_model_kor_jo = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
-    siren_model_kor_jo.load_state_dict(torch.load('siren_model_kor_jo.pth',weights_only=True,map_location=torch.device('cpu')))
+    siren_model_kor_jo.load_state_dict(torch.load('./models/siren_model_kor_jo.pth',weights_only=True,map_location=torch.device('cpu')))
     siren_model_kor_jo.eval()  # Set to eval mode
 
     x_values = np.linspace(-1, 1, 100)

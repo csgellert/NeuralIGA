@@ -9,9 +9,9 @@ from pstats import Stats
 import Geomertry
 
 model = NeuralImplicit.load_models("siren_model")
-r=1
-DIVISIONS = 5
-ORDER = 2
+
+DIVISIONS = 20
+ORDER = 1
 DELTA = 0.005
 
 
@@ -26,6 +26,7 @@ NControl_u = len(knotvector_u)-p-1
 NControl_w = len(knotvector_w)-q-1
 #mesh.plotMesh(xDivision,yDivision,delta=0.005)
 #mesh.plotAlayticHeatmap(FEM.solution_function)
+#mesh.plotDisctancefunction(model)
 Geomertry.init_spl(x,p,None,knotvector_u)
 
 K = np.zeros(((xDivision+p+1)*(yDivision+q+1),(xDivision+p+1)*(yDivision+q+1)))

@@ -5,8 +5,9 @@
 #generated_picures
 *.png
 #profiling staff
-profiling_stats.txt
+profiling_stats*
 *.prof_stats
+test*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

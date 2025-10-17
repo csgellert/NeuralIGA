@@ -8,9 +8,9 @@ import cProfile
 from pstats import Stats
 import Geomertry
 
-model = NeuralImplicit.load_models("siren_model")
+model = NeuralImplicit.load_models("double_circle_test")
 
-DIVISIONS = 20
+DIVISIONS = 8
 ORDER = 1
 DELTA = 0.005
 
@@ -49,8 +49,8 @@ print("Solving equation")
 result = FEM.solveWeak(K,F)
 print(f"Calculation time: {time.time()-start} ms")
 print(f"p={p}\tdiv = {xDivision}")
-#FEM.plotErrorHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=False,N=40)
-#FEM.plotResultHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=FEM.LARGER_DOMAIN,N=50)
+FEM.plotErrorHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=False,N=40)
+FEM.plotResultHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=FEM.LARGER_DOMAIN,N=50)
 
 
 FEM.visualizeResultsBspline(model,result,p,q,knotvector_u,knotvector_w,None,larger_domain=FEM.LARGER_DOMAIN)

@@ -1,13 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+import FEM
 from NeuralImplicit import Siren
 
 EPS = 0.9
 USE_SIGMOID_FOR_DISTANCE = False
-TRANSFORM = None#"trapezoid"  # Options: "sigmoid", "tanh", None
-if TRANSFORM == "trapezoid": raise NameError("Trapezoid transform is not recommended, use sigmoid or tanh instead")
-TANG = 2  # Used for trapezoid transform, adjust as needed
+TRANSFORM = "trapezoid"  # Options: "sigmoid", "tanh", None
+#if TRANSFORM == "trapezoid": raise NameError("Trapezoid transform is not recommended, use sigmoid or tanh instead")
+TANG = 1  # Used for trapezoid transform, adjust as needed
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     assert x0 < x1 and y0 < y1
     knotvector_u = np.linspace(x0,x1,xDivision+2)
@@ -30,16 +31,10 @@ def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     return knotvector_u, knotvector_w, weights, ctrlpts
 def getDefaultValues(div=2,order=1,delta = 0,larger_domain = True):
     assert delta >=0
-    if larger_domain:#[-1,1]
-        x0 = -1-delta
-        x1 = 1+delta
-        y0 = -1-delta
-        y1 = 1+delta
-    else: #[0,1]
-        x0 = 0-delta
-        x1 = 1+delta
-        y0 = 0-delta
-        y1 = 1+delta
+    x0 = FEM.DOMAIN["x1"] - delta
+    x1 = FEM.DOMAIN["x2"] + delta
+    y0 = FEM.DOMAIN["y1"] - delta
+    y1 = FEM.DOMAIN["y2"] + delta
     p = order
     q = order
     xDivision = div
@@ -153,8 +148,8 @@ def plotMesh(xdiv=2, ydiv=3,delta=0):
     plt.show()
 def plotDisctancefunction(model):
     N = 200
-    x_values = np.linspace(-1.1, 1.1, N)
-    y_values = np.linspace(-1.1, 1.1, N)
+    x_values = np.linspace(FEM.DOMAIN["x1"]-0.1, FEM.DOMAIN["x2"]+0.1, N)
+    y_values = np.linspace(FEM.DOMAIN["y1"]-0.1, FEM.DOMAIN["y2"]+0.1, N)
     X, Y = np.meshgrid(x_values, y_values)
     Z = np.zeros((N,N))
     # Evaluate the function at each point in the grid
@@ -195,32 +190,6 @@ def plotAlayticHeatmap(solfun,n=10):
     plt.grid(False)
     plt.show()
 if __name__ == "__main__":
-    # Import the SIREN model from main.py
-
-    # Instantiate the SIREN model (adjust input/output dims as needed)
-   
-    siren_model_kor_jo = Siren(in_features=2,out_features=1,hidden_features=256,hidden_layers=2,outermost_linear=True)
-    siren_model_kor_jo.load_state_dict(torch.load('./models/siren_model_kor_jo.pth',weights_only=True,map_location=torch.device('cpu')))
-    siren_model_kor_jo.eval()  # Set to eval mode
-
-    x_values = np.linspace(-1, 1, 100)
-    y_values = np.linspace(-1, 1, 100)
-    X, Y = np.meshgrid(x_values, y_values)
-    points = np.stack([X.ravel(), Y.ravel()], axis=1)
-
-    # SIREN expects input shape (N, 2)
-    with torch.no_grad():
-        d, dx, dy = distance_with_derivative_vect_trasformed(points[:,0], points[:,1], siren_model_kor_jo)
-        D = d.numpy().reshape(X.shape)
-        DX = dx.numpy().reshape(X.shape)
-        DY = dy.numpy().reshape(X.shape)
-
-    plt.figure(figsize=(8,6))
-    plt.contourf(X, Y, D, levels=50, cmap='coolwarm')
-    plt.colorbar(label='Distance')
-    plt.quiver(X, Y, DX, DY, color='k', scale=50)
-    plt.title('Distance Function and Gradient Field (SIREN)')
-    plt.xlabel('x')
-    plt.ylabel('y')
-    plt.axis('equal')
-    plt.show()
+    import NeuralImplicit
+    model= NeuralImplicit.load_models("double_circle_test")
+    plotDisctancefunction(model)

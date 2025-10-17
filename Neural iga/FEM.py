@@ -6,13 +6,14 @@ import math
 import torch
 from bspline import Bspline
 
-FUNCTION_CASE = 2
+FUNCTION_CASE = 7
 LARGER_DOMAIN = FUNCTION_CASE <=4 # if True, the domain is [-1,1]x[-1,1], otherwise [0,1]x[0,1]
 print(f"Larger domain: {LARGER_DOMAIN}")
 MAX_SUBDIVISION = 4
 assert FUNCTION_CASE != 1
 # Pre-compute Gauss quadrature data to avoid repeated calculations
 _GAUSS_CACHE = {}
+DOMAIN = {"x1": -2, "x2": 2, "y1": -2, "y2": 2}
 
 def _get_gauss_points(p):
     """Cache Gauss quadrature points and weights"""
@@ -54,6 +55,9 @@ def load_function_vectorized(x, y):
         return 8*math.pi*math.pi*np.sin(2*math.pi*x)*np.sin(2*math.pi*y)
     elif FUNCTION_CASE == 6: #tube
         return -(x**2 + y**2)
+    elif FUNCTION_CASE == 7: #double circle
+        arg = (x**2 + y**2)*math.pi
+        return 4*math.pi*np.cos(arg) -4*math.pi*arg*np.sin(arg)
     else:
         raise NotImplementedError
 
@@ -69,6 +73,8 @@ def dirichletBoundary_vectorized(x, y):
         return x + 2*y
     elif FUNCTION_CASE == 5:
         return np.zeros_like(x)
+    elif FUNCTION_CASE == 7:
+        return np.zeros_like(x)
     else: 
         raise NotImplementedError
 
@@ -80,6 +86,8 @@ def dirichletBoundaryDerivativeX_vectorized(x, y):
         return np.ones_like(x)
     elif FUNCTION_CASE == 5:#L-shape
         return np.zeros_like(x)
+    elif FUNCTION_CASE == 7:
+        return np.zeros_like(x)
     else: 
         raise NotImplementedError
 
@@ -90,6 +98,8 @@ def dirichletBoundaryDerivativeY_vectorized(x, y):
     elif FUNCTION_CASE == 4:
         return np.full_like(x, 2)
     elif FUNCTION_CASE ==5:  #L-shape
+        return np.zeros_like(x)
+    elif FUNCTION_CASE == 7:
         return np.zeros_like(x)
     else: 
         raise NotImplementedError
@@ -109,8 +119,10 @@ def load_function(x,y):
         return 8*math.pi*math.pi*math.sin(2*math.pi*x)*math.sin(2*math.pi*y)
     elif FUNCTION_CASE == 6: #tube
         return -(x**2 + y**2)
-    else:
-        raise NotImplementedError
+    elif FUNCTION_CASE == 7: #double circle
+        arg = (x**2 + y**2)*math.pi
+        return 4*math.pi*math.cos(arg) - 4*math.pi* arg*math.sin(arg)
+    raise NotImplementedError
 def solution_function(x,y):
     if FUNCTION_CASE == 1:
         return x*(x**2 + y**2 -1)
@@ -122,6 +134,8 @@ def solution_function(x,y):
         return x*(x**2 + y**2 -1) + x +2*y
     elif FUNCTION_CASE == 5: #L-shape
         return math.sin(2*math.pi*x)*math.sin(2*math.pi*y)
+    elif FUNCTION_CASE == 7: #double circle
+        return math.sin(math.pi*(x**2 + y**2))
     else: raise NotImplementedError
 def dirichletBoundary(x,y):
     if FUNCTION_CASE == 1:
@@ -134,6 +148,8 @@ def dirichletBoundary(x,y):
         return x+2*y
     elif FUNCTION_CASE == 5:
         return 0
+    elif FUNCTION_CASE == 7:
+        return 0
     else: raise NotImplementedError
 def dirichletBoundaryDerivativeX(x,y):
     if FUNCTION_CASE <= 3:
@@ -142,6 +158,8 @@ def dirichletBoundaryDerivativeX(x,y):
         return 1
     elif FUNCTION_CASE == 5:#L-shape
         return 0
+    elif FUNCTION_CASE == 7:
+        return 0
     else: raise NotImplementedError
 def dirichletBoundaryDerivativeY(x,y):
     if FUNCTION_CASE <= 3:
@@ -149,6 +167,8 @@ def dirichletBoundaryDerivativeY(x,y):
     elif FUNCTION_CASE == 4:
         return 2
     elif FUNCTION_CASE ==5:  #L-shape
+        return 0
+    elif FUNCTION_CASE == 7:
         return 0
     else: raise NotImplementedError
 
@@ -484,12 +504,8 @@ def visualizeResultsBspline(model,results,p,q,knotvector_x, knotvector_y,surface
     yPoints = []
     result = []
     analitical = []
-    if larger_domain:
-        x = np.linspace(-1,1,40)
-        y = np.linspace(-1,1,40)
-    else:
-        x = np.linspace(0,1,40)
-        y = np.linspace(0,1,40)
+    x = np.linspace(DOMAIN["x1"], DOMAIN["x2"], 40)
+    y = np.linspace(DOMAIN["y1"], DOMAIN["y2"], 40)
     for xx in x:
         for yy in y:
             sum = 0
@@ -521,12 +537,8 @@ def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y,larger_do
     yPoints = []
     result = []
     analitical = []
-    if larger_domain:
-        x = np.linspace(-1,1,40)
-        y = np.linspace(-1,1,40)
-    else:
-        x = np.linspace(0,1,40)
-        y = np.linspace(0,1,40)
+    x = np.linspace(DOMAIN["x1"], DOMAIN["x2"], 40)
+    y = np.linspace(DOMAIN["y1"], DOMAIN["y2"], 40)
     for xx in x:
         for yy in y:
             sum = 0
@@ -549,12 +561,8 @@ def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y,larger_do
 def plotErrorHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain = True,N=150):
 
     marg = 0.1
-    if larger_domain:
-        x = np.linspace(-1-marg,1+marg,N)
-        y = np.linspace(-1-marg,1+marg,N)
-    else:
-        x = np.linspace(0-marg,1+marg,N)
-        y = np.linspace(0-marg,1+marg,N)
+    x = np.linspace(DOMAIN["x1"]-marg,DOMAIN["x2"]+marg,N)
+    y = np.linspace(DOMAIN["y1"]-marg,DOMAIN["y2"]+marg,N)
     X,Y = np.meshgrid(x,y)
     Z_N=np.zeros((N,N))
     for idxx,xx in enumerate(x):
@@ -589,12 +597,8 @@ def plotErrorHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain =
     plt.show()
 def plotResultHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain = True,N=150):
     marg = 0.05
-    if larger_domain:
-        x = np.linspace(-1-marg,1+marg,N)
-        y = np.linspace(-1-marg,1+marg,N)
-    else:
-        x = np.linspace(0-marg,1+marg,N)
-        y = np.linspace(0-marg,1+marg,N)
+    x = np.linspace(DOMAIN["x1"]-marg,DOMAIN["x2"]+marg,N)
+    y = np.linspace(DOMAIN["y1"]-marg,DOMAIN["y2"]+marg,N)
     X,Y = np.meshgrid(x,y)
     Z_A=np.zeros((N,N))
     Z_N=np.zeros((N,N))
@@ -620,15 +624,8 @@ def plotResultHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain 
     plt.contourf(X, Y, Z_A,levels=20)
     #plt.axis('equal')
     plt.colorbar()
-    if larger_domain:
-        highlight_level = 0.0
-        plt.contour(X, Y, Z_A, levels=[highlight_level], colors='red') 
-    else:
-        points = [(0.0, 1.0), (0.0, 0.0), (1.0, 0.0),(1.0,0.5),(0.5,0.5),(0.5,1.0),(0.0, 1.0)]
-
-        # Plot red lines between the points
-        for i in range(len(points)-1):
-                plt.plot([points[i][0], points[i+1][0]], [points[i][1], points[i+1][1]], 'r-')
+    highlight_level = 0.0
+    plt.contour(X, Y, Z_A, levels=[highlight_level], colors='red') 
 
     # Show the plot
     

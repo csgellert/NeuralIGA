@@ -8,6 +8,8 @@
 profiling_stats*
 *.prof_stats
 test*
+# 3D data files
+*.obj
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

@@ -54,6 +54,82 @@ def bspline_basis_functions(t, knots, degree, device=None):
     
     return basis
 
+def bspline_basis_derivatives(t, knots, degree, device=None):
+    """
+    Compute derivatives of B-spline basis functions using recursive formula.
+    Vectorized implementation for multiple parameter values.
+    
+    Args:
+        t: tensor of shape (num_t,) - parameter values to evaluate at
+        knots: tensor of shape (num_knots,) - knot vector
+        degree: int - degree of B-spline
+        device: torch device
+    """
+    if device is None:
+        device = t.device
+    
+    t = t.to(device)
+    knots = knots.to(device)
+    
+    num_t = t.shape[0]
+    num_knots = knots.shape[0]
+    num_basis = num_knots - degree - 1
+    
+    # Compute basis functions of degree-1
+    basis_lower = bspline_basis_functions(t, knots, degree - 1, device)
+    
+    # Initialize derivative basis functions
+    deriv_basis = torch.zeros(num_t, num_basis, device=device)
+    
+    for i in range(num_basis):
+        # Left term
+        if knots[i + degree] != knots[i]:
+            left_coeff = degree / (knots[i + degree] - knots[i])
+            deriv_basis[:, i] += left_coeff * basis_lower[:, i]
+        
+        # Right term
+        if i + 1 < num_basis and knots[i + degree + 1] != knots[i + 1]:
+            right_coeff = degree / (knots[i + degree + 1] - knots[i + 1])
+            deriv_basis[:, i] -= right_coeff * basis_lower[:, i + 1]
+    
+    return deriv_basis
+
+def bspline_normalvectors(t, control_points, knots, degree, device=None):
+    """
+    Compute normal vectors of B-spline curve at parameter values t.
+    
+    Args:
+        t: tensor of shape (num_t,) - parameter values [0, 1]
+        control_points: tensor of shape (num_cp, 2) - control points [x, y]
+        knots: tensor of shape (num_knots,) - knot vector
+        degree: int - degree of B-spline
+        device: torch device
+    """
+    
+    if device is None:
+        device = control_points.device
+    
+    t = t.to(device)
+    control_points = control_points.to(device)
+    knots = knots.to(device)
+    
+    # Compute basis function derivatives
+    deriv_basis = bspline_basis_derivatives(t, knots, degree, device)  # (num_t, num_basis)
+    
+    # Compute tangent vectors
+    tangents = torch.matmul(deriv_basis, control_points)  # (num_t, 2)
+    
+    # Compute normal vectors by rotating tangents 90 degrees
+    normals = torch.zeros_like(tangents)
+    normals[:, 0] = -tangents[:, 1]
+    normals[:, 1] = tangents[:, 0]
+    
+    # Normalize normal vectors
+    norms = torch.norm(normals, dim=1, keepdim=True) + 1e-8  # Avoid division by zero
+    normals = normals / norms
+    
+    return normals
+
 def evaluate_bspline_curve_vectorized(t, control_points, knots, degree, device=None):
     """
     Evaluate B-spline curve at multiple parameter values.
@@ -391,7 +467,7 @@ def plot_bspline_distance_field(control_points, degree=3, N=400, extent=(-2, 2, 
     plt.grid(True, alpha=0.3)
     plt.show()
 
-def generate_points_on_curve(control_points, degree=3, num_points=100, device=None):
+def generate_points_on_curve(control_points, degree=3, num_points=100, device=None, return_t=False):
     torch_device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     control_points = control_points.to(torch_device)
     knots = create_knot_vector(control_points.shape[0], degree, closed=True).to(torch_device)
@@ -399,7 +475,65 @@ def generate_points_on_curve(control_points, degree=3, num_points=100, device=No
     max_t = knots[-degree-1]
     t_values = torch.rand(num_points, device=torch_device) * (max_t - min_t) + min_t
     curve_points = evaluate_bspline_curve_vectorized(t_values, control_points, knots, degree, device=torch_device)
-    return curve_points
+    if return_t:
+        return curve_points, t_values
+    else:
+        return curve_points
+
+def plot_normal_vectors_on_bspline(control_points, degree=3, num_vectors=20, vector_length=0.2, device=None):
+    """
+    Plot normal vectors on a B-spline curve.
+    
+    Args:
+        control_points: tensor of shape (num_cp, 2) - B-spline control points
+        degree: int - B-spline degree
+        num_vectors: int - number of normal vectors to plot
+        vector_length: float - length of normal vectors
+        device: torch device
+    """
+    import matplotlib.pyplot as plt
+    
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    control_points = control_points.to(device)
+    knots = create_knot_vector(control_points.shape[0], degree, closed=True).to(device)
+    
+    # Sample parameter values for normal vectors
+    t_values = torch.linspace(knots[degree], knots[-degree-1], num_vectors, device=device)
+    
+    # Evaluate curve points
+    curve_points = evaluate_bspline_curve_vectorized(t_values, control_points, knots, degree, device)
+    
+    # Compute normal vectors
+    normals = bspline_normalvectors(t_values, control_points, knots, degree, device)
+    
+    # Scale normals
+    normals_scaled = normals * vector_length
+    
+    # Plotting
+    curve_points_cpu = curve_points.cpu().numpy()
+    normals_cpu = normals_scaled.cpu().numpy()
+    control_points_cpu = control_points.cpu().numpy()
+    
+    plt.figure(figsize=(6, 6))
+    plt.plot(control_points_cpu[:, 0], control_points_cpu[:, 1], 'ro--', label='Control Points', markersize=5)
+    plt.plot(curve_points_cpu[:, 0], curve_points_cpu[:, 1], 'b-', label='B-spline Curve', linewidth=2)
+    
+    for i in range(num_vectors):
+        start = curve_points_cpu[i]
+        end = start + normals_cpu[i]
+        plt.arrow(start[0], start[1], normals_cpu[i, 0], normals_cpu[i, 1],
+                  head_width=0.02, head_length=0.04, fc='g', ec='g')
+    
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.title(f'B-spline Curve with Normal Vectors (degree={degree})')
+    plt.gca().set_aspect('equal', adjustable='box')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
 
 # =====================================================================================
 # EXAMPLE USAGE AND TESTING
@@ -473,6 +607,7 @@ if __name__ == "__main__":
     # Uncomment to visualize (requires matplotlib)
     # print("\nGenerating visualizations...")
     #plot_bspline_distance_field(circle_cp, degree=2, N=100, extent=(-2, 2, -2, 2))
+    plot_normal_vectors_on_bspline(star_cp, degree=1, num_vectors=100, vector_length=0.2, device=None)
     plot_bspline_distance_field(star_cp, degree=1, N=70, extent=(-2, 2, -2, 2))
     
     # Also run the original star distance plot for comparison

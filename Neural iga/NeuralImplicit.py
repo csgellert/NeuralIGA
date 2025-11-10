@@ -6,53 +6,32 @@ import matplotlib.pyplot as plt
 import datetime
 import Geomertry
 import math
+import geometry_bspline as bsp_geom
 class NeuralNetwork(nn.Module):
-    def __init__(self, input_size=2, hidden_size=10, num_hidden_layers=1, output_size=1):
+    def __init__(self, architecture):
         super(NeuralNetwork, self).__init__()
 
-        # Create a list to store all layers
         layers = []
+        self.loss_history = []
+        self.optimizer = None
+        self.name = "ReLU"
+        self.lr_scheduler = None
+        self.error_history = {
+            "L1": [],
+            "L2": [],
+            "Linf": []
+        }
 
-        # First layer (input to the first hidden layer)
-        layers.append(nn.Linear(input_size, hidden_size))
-        layers.append(nn.ReLU())
-
-        # Add hidden layers (number of hidden layers is flexible)
-        for _ in range(num_hidden_layers):
-            layers.append(nn.Linear(hidden_size, hidden_size))
-            layers.append(nn.ReLU())
-            #layers.append(nn.Softplus(100))
-
-        # Output layer (from the last hidden layer to the output)
-        layers.append(nn.Linear(hidden_size, output_size))
-
+        for i in range(len(architecture) - 1):
+            layers.append(nn.Linear(architecture[i], architecture[i+1]))
+            if i < len(architecture) - 2:
+                layers.append(nn.ReLU())
         # Combine the layers into a sequential model
-        self.network = nn.Sequential(*layers)
+        self.net = nn.Sequential(*layers)
 
     def forward(self, coords):
-        return self.network(coords)
-    def train_network(self,optim,total_steps,steps_til_summary=20):
-        for step in range(total_steps):
-            model_input, ground_truth = generate_data(10000,0)
-            model_output = self.forward(model_input)
-            loss = ((model_output - ground_truth)**2).mean()
-
-
-            if not step % steps_til_summary:
-                print("Step %d, Total loss %0.8f" % (step, loss))
-
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
-        print("Step %d, Total loss %0.6f" % (step, loss))
-    def save(self,use_date = False):
-        if use_date:
-            date=datetime.datetime.now()
-            print(date.strftime('%b'),date.strftime('%d') ,"-",  date.strftime('%X'))
-            torch.save(self.state_dict(), f"relu_model{date.strftime('%b')}-{date.strftime('%d')}-{date.strftime('%X')}.pth")
-        else:
-            torch.save(self.state_dict(), "relu_model_last.pth")
-        print("Model saved successfully")
+        return self.net(coords)
+    
 class SineLayer(nn.Module):
     # See paper sec. 3.2, final paragraph, and supplement Sec. 1.5 for discussion of omega_0.
 
@@ -86,44 +65,210 @@ class SineLayer(nn.Module):
     def forward(self, input):
         return torch.sin(self.omega_0 * self.linear(input))
 
-    def forward_with_intermediate(self, input):
-        # For visualization of activation distributions
-        intermediate = self.omega_0 * self.linear(input)
-        return torch.sin(intermediate), intermediate
-
-
 class Siren(nn.Module):
-    def __init__(self, in_features, hidden_features, hidden_layers, out_features, outermost_linear=False,
-                 first_omega_0=30, hidden_omega_0=30.):
+    def __init__(self, architecture, outermost_linear=False,
+                 first_omega_0=60, hidden_omega_0=60):
         super().__init__()
+        self.architecture = architecture
+        in_features = architecture[0]
+        out_features = architecture[-1]
+        hidden_layers = len(architecture)-2
+
+        self.loss_history = []
+        self.optimizer = None
+        self.name = "SIREN"
+        self.lr_scheduler = None
+        self.error_history = {
+            "L1": [],
+            "L2": [],
+            "Linf": []
+        }
 
         self.net = []
-        self.net.append(SineLayer(in_features, hidden_features,
+        self.net.append(SineLayer(in_features, architecture[1],
                                   is_first=True, omega_0=first_omega_0))
 
-        for i in range(hidden_layers):
-            self.net.append(SineLayer(hidden_features, hidden_features,
+        for i in range(hidden_layers-1):
+            self.net.append(SineLayer(architecture[i+1],architecture[i+2] ,
                                       is_first=False, omega_0=hidden_omega_0))
-        #self.net.append(nn.Linear(hidden_features,hidden_features))
-        #self.net.append(nn.Softplus(100))
+        self.net.append(SineLayer(architecture[-2],architecture[-2] ,
+                                      is_first=False, omega_0=hidden_omega_0))
 
         if outermost_linear:
-            final_linear = nn.Linear(hidden_features, out_features)
+            final_linear = nn.Linear(architecture[-2], out_features)
 
             with torch.no_grad():
-                final_linear.weight.uniform_(-np.sqrt(6 / hidden_features) / hidden_omega_0,
-                                              np.sqrt(6 / hidden_features) / hidden_omega_0)
+                final_linear.weight.uniform_(-np.sqrt(6 / architecture[-2]) / hidden_omega_0,
+                                              np.sqrt(6 / architecture[-2]) / hidden_omega_0)
 
             self.net.append(final_linear)
         else:
-            self.net.append(SineLayer(hidden_features, out_features,
+            self.net.append(SineLayer(architecture[-2], out_features,
                                       is_first=False, omega_0=hidden_omega_0))
 
         self.net = nn.Sequential(*self.net)
 
+
     def forward(self, coords):
         #coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
         output = self.net(coords)
+        return output
+class SoftSine(nn.Module):
+    def __init__(self, architecture, outermost_linear=False,
+                first_omega_0=60, hidden_omega_0=60):
+        super().__init__()
+        self.architecture = architecture
+        in_features = architecture[0]
+        out_features = architecture[-1]
+        hidden_layers = len(architecture)-2
+
+        self.loss_history = []
+        self.error_history = {
+            "L1": [],
+            "L2": [],
+            "Linf": []
+        }
+        self.optimizer = None
+        self.name = "SoftSine"
+        self.lr_scheduler = None
+
+        self.net = []
+        self.net.append(SineLayer(in_features, architecture[1],
+                                  is_first=True, omega_0=first_omega_0))
+
+        for i in range(hidden_layers-1):
+            if i % 2 ==0:
+                self.net.append(nn.Linear(architecture[i+1],architecture[i+2]))
+                self.net.append(nn.Softplus())
+            else:
+                self.net.append(SineLayer(architecture[i+1],architecture[i+2] ,
+                                      is_first=False, omega_0=hidden_omega_0))
+        if hidden_layers % 2 == 1:
+            self.net.append(nn.Linear(architecture[-2],architecture[-2]))
+            self.net.append(nn.Softplus())
+        else:
+            self.net.append(SineLayer(architecture[-2],architecture[-2] ,
+                                      is_first=False, omega_0=hidden_omega_0))
+
+        if outermost_linear:
+            final_linear = nn.Linear(architecture[-2], out_features)
+
+            with torch.no_grad():
+                final_linear.weight.uniform_(-np.sqrt(6 / architecture[-2]) / hidden_omega_0,
+                                              np.sqrt(6 / architecture[-2]) / hidden_omega_0)
+
+            self.net.append(final_linear)
+        else:
+            self.net.append(SineLayer(architecture[-2], out_features,
+                                      is_first=False, omega_0=hidden_omega_0))
+
+        self.net = nn.Sequential(*self.net)
+
+
+    def forward(self, coords):
+        #coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
+        output = self.net(coords)
+        return output
+        #coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
+        output = self.net(coords)
+        return output
+
+class PosEncoding(nn.Module):
+    def __init__(self, num_freqs=10, include_input=True):
+        super().__init__()
+        self.num_freqs = num_freqs
+        self.include_input = include_input
+        self.freq_bands = 2.0 ** torch.linspace(0.0, num_freqs - 1, num_freqs)
+
+    def forward(self, x):
+        out = []
+        if self.include_input:
+            out.append(x)
+
+        for freq in self.freq_bands:
+            out.append(torch.sin(freq * x))
+            out.append(torch.cos(freq * x))
+
+        return torch.cat(out, dim=-1)
+
+class PE_Relu(nn.Module):
+    def __init__(self, architecture, num_freqs=10, include_input=True):
+        super().__init__()
+        self.pos_encoding = PosEncoding(num_freqs, include_input)
+        in_features = architecture[0]
+        encoded_features = in_features * (2 * num_freqs + int(include_input))
+        new_architecture = [encoded_features] + architecture[1:]
+        self.net = []
+        self.loss_history = []
+        self.error_history = {
+            "L1": [],
+            "L2": [],
+            "Linf": []
+        }
+        self.optimizer = None
+        self.name = "PE_ReLU"
+        self.lr_scheduler = None
+        for i in range(len(new_architecture) - 1):
+            self.net.append(nn.Linear(new_architecture[i], new_architecture[i+1]))
+            if i < len(new_architecture) - 2:
+                self.net.append(nn.ReLU())
+
+        self.net = nn.Sequential(*self.net)
+
+    def forward(self, coords):
+        encoded_coords = self.pos_encoding(coords)
+        output = self.net(encoded_coords)
+        return output
+class PE_Siren(nn.Module):
+    def __init__(self, architecture, num_freqs=10, include_input=True,
+                 outermost_linear=False, first_omega_0=60, hidden_omega_0=60):
+        super().__init__()
+        self.pos_encoding = PosEncoding(num_freqs, include_input)
+        in_features = architecture[0]
+        encoded_features = in_features * (2 * num_freqs + int(include_input))
+        new_architecture = [encoded_features] + architecture[1:]
+        self.net = []
+        in_features = new_architecture[0]
+        out_features = new_architecture[-1]
+        hidden_layers = len(new_architecture)-2
+
+        self.loss_history = []
+        self.optimizer = None
+        self.name = "PE_SIREN"
+        self.lr_scheduler = None
+        self.error_history = {
+            "L1": [],
+            "L2": [],
+            "Linf": []
+        }
+
+
+        self.net.append(SineLayer(in_features, new_architecture[1],
+                                  is_first=True, omega_0=first_omega_0))
+
+        for i in range(hidden_layers-1):
+            self.net.append(SineLayer(new_architecture[i+1],new_architecture[i+2] ,
+                                      is_first=False, omega_0=hidden_omega_0))
+        self.net.append(SineLayer(new_architecture[-2],new_architecture[-2] ,
+                                      is_first=False, omega_0=hidden_omega_0))
+
+        if outermost_linear:
+            final_linear = nn.Linear(new_architecture[-2], out_features)
+            with torch.no_grad():
+                final_linear.weight.uniform_(-np.sqrt(6 / new_architecture[-2]) / hidden_omega_0,
+                                              np.sqrt(6 / new_architecture[-2]) / hidden_omega_0)
+
+            self.net.append(final_linear)
+        else:
+            self.net.append(SineLayer(new_architecture[-2], out_features,
+                                      is_first=False, omega_0=hidden_omega_0))
+
+        self.net = nn.Sequential(*self.net)
+        
+
+    def forward(self, coords):
+        encoded_coords = self.pos_encoding(coords)
+        output = self.net(encoded_coords)
         return output
 def generate_data(num_samples,fun_num = 0, device=None):
     """
@@ -512,51 +657,50 @@ def load_models(model_type="siren_model"):
         return model
     else:
         raise NotImplementedError("Model not implemented")
-
-def benchmark_star_distance_functions(num_points=10000, device=None):
-    """
-    Benchmark the performance difference between original and vectorized star distance functions.
-    """
-    import time
-    import numpy as np
-    import torch
-        
+def generate_bspline_data(num_samples, case=1, device=None):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if case == 1:
+        margain = 0.1
+        x = torch.rand(num_samples, 2, device=device) * (2+margain) - 1-margain  # Range [-1, 1]
+        star_cp = bsp_geom.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=1)
+        y = bsp_geom.bspline_signed_distance_vectorized(x, star_cp, device=device)
+        return x, y.view(-1, 1)
+def train_models(model_list, num_epochs = 100, batch_size=10000, fun_num=1, device=None, crt = nn.L1Loss(),create_error_history = False):
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    criterion = crt
+    if create_error_history:
+        crt_L1 = nn.L1Loss()
+        crt_L2 = nn.MSELoss()
+        crt_Linf = lambda output, target: torch.max(torch.abs(output - target))
+    report_interval = max(1, num_epochs // 10)
+    for epoch in range(num_epochs):
+        # Generate training data
+        #pts, target = generate_bspline_data(batch_size, case=fun_num, device=device)
+        pts, target = generate_data(batch_size, fun_num=fun_num, device=device) 
+        for model in model_list:
+            model.to(device)
+            pred = model(pts)
+            loss = criterion(pred, target)
+            model.optimizer.zero_grad()
+            loss.backward()
+            model.optimizer.step()
+            model.loss_history.append(loss.item())      
+            if create_error_history:
+                with torch.no_grad():
+                    L1_error = crt_L1(pred, target).item()
+                    L2_error = torch.sqrt(crt_L2(pred, target)).item()
+                    Linf_error = crt_Linf(pred, target).item()
+                    model.error_history["L1"].append(L1_error)
+                    model.error_history["L2"].append(L2_error)
+                    model.error_history["Linf"].append(Linf_error)  
+        if (epoch + 1) % report_interval == 0 or epoch == 0:
+            print(f"Epoch [{epoch}], Losses: " + 
+                  ", ".join([f"{model.name}: {model.loss_history[-1]:.6f}" for model in model_list]))
+        
     
-    print(f"Benchmarking with {num_points} points on device: {device}")
-    
-    # Generate test coordinates
-    coordinates = 2 * torch.rand(num_points, 2, device=device) - 1
-    
-    # Test original function (moved to CPU for fairness since original uses Python loops)
-    coordinates_cpu = coordinates.cpu()
-    print("\nTesting original function...")
-    start_time = time.time()
-    distances_original = torch.empty(num_points, 1)
-    for i in range(num_points):
-        x, y = coordinates_cpu[i]
-        distances_original[i] = distance_from_star_contour([x.item(), y.item()])
-    original_time = time.time() - start_time
-    
-    # Test vectorized function
-    print("Testing vectorized function...")
-    start_time = time.time()
-    distances_vectorized = distance_from_star_contour_vectorized(coordinates, device=device)
-    vectorized_time = time.time() - start_time
-    
-    # Compare results (move to CPU for comparison)
-    distances_vectorized_cpu = distances_vectorized.cpu()
-    max_diff = torch.max(torch.abs(distances_original.squeeze() - distances_vectorized_cpu)).item()
-    
-    print(f"\nResults:")
-    print(f"Original function time: {original_time:.4f} seconds")
-    print(f"Vectorized function time: {vectorized_time:.4f} seconds")
-    print(f"Speedup: {original_time/vectorized_time:.2f}x")
-    print(f"Maximum difference in results: {max_diff:.8f}")
-    print(f"Results match: {max_diff < 1e-6}")
-    
-    return original_time, vectorized_time, max_diff
+
 def plot_star_distance_on_unit_square(N=400, R=1.0, r=0.5, n=5, device=None, contour=False, levels=20, cmap='viridis', chunk_size=200000):
     """
     Plot signed distance from the star contour on the unit square [0,1]x[0,1] using the

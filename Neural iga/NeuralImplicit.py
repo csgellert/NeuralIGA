@@ -581,9 +581,9 @@ def distance_points_to_line_segments_vectorized(points, line_starts, line_ends):
     distances = torch.norm(points_expanded - projections, dim=2)  # (num_points, num_segments)
     
     return distances
-def plotDisctancefunction(eval_fun, N=500,contour = False):
-    x_values = np.linspace(0, 1.05, N)
-    y_values = np.linspace(0, 1.05, N)
+def plotDisctancefunction(eval_fun, N=500, extent=(-1.1, 1.1, -1.1, 1.1), contour = False):
+    x_values = np.linspace(extent[0], extent[1], N)
+    y_values = np.linspace(extent[2], extent[3], N)
     X, Y = np.meshgrid(x_values, y_values)
     Z = np.zeros((N,N))
     # Evaluate the function at each point in the grid
@@ -698,56 +698,55 @@ def train_models(model_list, num_epochs = 100, batch_size=10000, fun_num=1, devi
         if (epoch + 1) % report_interval == 0 or epoch == 0:
             print(f"Epoch [{epoch}], Losses: " + 
                   ", ".join([f"{model.name}: {model.loss_history[-1]:.6f}" for model in model_list]))
-        
-    
 
-def plot_star_distance_on_unit_square(N=400, R=1.0, r=0.5, n=5, device=None, contour=False, levels=20, cmap='viridis', chunk_size=200000):
-    """
-    Plot signed distance from the star contour on the unit square [0,1]x[0,1] using the
-    distance_from_star_contour_vectorized function.
-
-    Args:
-        N: resolution per axis (total points = N*N)
-        R, r, n: star parameters forwarded to the distance function
-        device: torch device (defaults to cuda if available)
-        contour: if True use contour (lines) otherwise filled contourf
-        levels: contour levels
-        cmap: matplotlib colormap
-        chunk_size: process this many points per batch to limit memory use
-    """
-    import matplotlib.pyplot as plt
-
+def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun_num=1, device=None,
+                              crt = nn.L1Loss(),create_error_history = False,eikon_coeff=0.0,boundry_coeff=0.0,
+                              xi_coeff=0.0,boundary_norm_coeff=0.0, evaluation_coeff=1):
     if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')   
+    criterion = crt
+    if create_error_history:
+        crt_L1 = nn.L1Loss()
+        crt_L2 = nn.MSELoss()
+        crt_Linf = lambda output, target: torch.max(torch.abs(output - target))
+    report_interval = max(1, num_epochs // 10)
+    for epoch in range(num_epochs):
+        # Generate training data
+        #pts, target = generate_bspline_data(batch_size, case=fun_num, device=device)
+        pts, target = generate_data(batch_size, fun_num=fun_num, device=device) 
+        for model in model_list:
+            model.to(device)
+            pred = model(pts)
+            loss = evaluation_coeff * criterion(pred, target)
+            if eikon_coeff > 0.0:
+                # Eikonal term
+                pts.requires_grad_(True)
+                pred_eik = model(pts)
+                grads = torch.autograd.grad(outputs=pred_eik, inputs=pts,
+                                            grad_outputs=torch.ones_like(pred_eik),
+                                            create_graph=True, retain_graph=True)[0]
+                eikonal_term = ((grads.norm(dim=1) - 1) ** 2).mean()
+                loss += eikon_coeff * eikonal_term
+            if boundry_coeff > 0.0:
+                raise NotImplementedError("Boundary term not implemented in this snippet.")
+            if xi_coeff > 0.0:
+                xi_term = torch.exp(-100 * torch.abs(pred)).mean()
+                loss += xi_coeff * xi_term
+            if boundary_norm_coeff > 0.0:
+                raise NotImplementedError("Boundary norm term not implemented in this snippet.")
 
-    # Create grid in numpy for plotting axes
-    x_vals = np.linspace(-1.0, 1.0, N)
-    y_vals = np.linspace(-1.0, 1.0, N)
-    X, Y = np.meshgrid(x_vals, y_vals)
-
-    # Build points tensor (flattened)
-    pts_np = np.vstack([X.ravel(), Y.ravel()]).T.astype(np.float32)  # (N*N, 2)
-    pts = torch.from_numpy(pts_np).to(device)
-
-    # Compute distances in chunks to avoid memory spike
-    distances = torch.empty(pts.shape[0], device=device, dtype=torch.float32)
-    with torch.no_grad():
-        for i in range(0, pts.shape[0], chunk_size):
-            j = i + chunk_size
-            distances[i:j] = distance_from_star_contour_vectorized(pts[i:j], R=R, r=r, n=n, device=device)
-
-    Z = distances.cpu().numpy().reshape(N, N)
-
-    plt.figure(figsize=(6, 6))
-    if contour:
-        plt.contour(X, Y, Z, levels=levels, cmap=cmap)
-    else:
-        plt.contourf(X, Y, Z, levels=levels, cmap=cmap)
-    
-    plt.colorbar(label='signed distance')
-    plt.xlabel('x')
-    plt.ylabel('y')
-    plt.title(f'Star signed distance (R={R}, r={r}, n={n}) on unit square')
-    plt.gca().set_aspect('equal', adjustable='box')
-    plt.contour(X, Y, Z, levels=[0], colors='red')
-    plt.show()
+            model.optimizer.zero_grad()
+            loss.backward()
+            model.optimizer.step()
+            model.loss_history.append(loss.item())      
+            if create_error_history:
+                with torch.no_grad():
+                    L1_error = crt_L1(pred, target).item()
+                    L2_error = torch.sqrt(crt_L2(pred, target)).item()
+                    Linf_error = crt_Linf(pred, target).item()
+                    model.error_history["L1"].append(L1_error)
+                    model.error_history["L2"].append(L2_error)
+                    model.error_history["Linf"].append(Linf_error)  
+        if (epoch + 1) % report_interval == 0 or epoch == 0:
+            print(f"Epoch [{epoch}], Losses: " + 
+                  ", ".join([f"{model.name}: {model.loss_history[-1]:.6f}" for model in model_list]))

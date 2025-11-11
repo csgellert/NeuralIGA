@@ -396,6 +396,25 @@ def create_star_bspline_control_points(center=(0.0, 0.0), outer_radius=1.0, inne
     control_points = torch.cat([control_points, control_points[:degree]])
     return control_points
 
+def create_polygon_bspline_control_points(num_vertices, degree=1, device=None):
+    """
+    Create control points for a regular polygon B-spline curve.
+    
+    Args:
+        num_vertices: int - number of polygon vertices
+        degree: int - degree of the B-spline
+        device: torch device
+    """
+    if device is None:
+        device = torch.device('cpu')
+    
+    angles = torch.linspace(0, 2 * torch.pi, num_vertices + 1, device=device)[:-1]  # Exclude duplicate
+    x = torch.cos(angles)
+    y = torch.sin(angles)
+    vertices = torch.stack([x, y], dim=1)
+    control_points = torch.cat([vertices, vertices[:degree]])
+    return control_points
+
 def plot_bspline_distance_field(control_points, degree=3, N=400, extent=(-2, 2, -2, 2), 
                                contour=False, levels=20, device=None, chunk_size=200000):
     """
@@ -534,10 +553,66 @@ def plot_normal_vectors_on_bspline(control_points, degree=3, num_vectors=20, vec
     plt.grid(True)
     plt.show()
 
-
-# =====================================================================================
-# EXAMPLE USAGE AND TESTING
-# =====================================================================================
+def plot_model_error_map(model, ctrl_pts, degree=1, N=200, extent=(-1.1, 1.1, -1.1, 1.1), device=None):
+    """
+    Plot error map of a neural implicit model against B-spline signed distance function.
+    
+    Args:
+        model: neural implicit model with callable interface
+        ctrl_pts: tensor of shape (num_cp, 2) - B-spline control points
+        N: int - resolution per axis
+        extent: tuple - (xmin, xmax, ymin, ymax) plotting extent
+        device: torch device
+    """
+    import matplotlib.pyplot as plt
+    
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    ctrl_pts = ctrl_pts.to(device)
+    
+    # Create grid
+    x_vals = np.linspace(extent[0], extent[1], N)
+    y_vals = np.linspace(extent[2], extent[3], N)
+    X, Y = np.meshgrid(x_vals, y_vals)
+    
+    # Flatten grid points
+    pts_np = np.vstack([X.ravel(), Y.ravel()]).T.astype(np.float32)
+    pts = torch.from_numpy(pts_np).to(device)
+    
+    # Compute model predictions in chunks
+    model_values = torch.empty(pts.shape[0], device=device, dtype=torch.float32)
+    chunk_size = 200000
+    
+    with torch.no_grad():
+        for i in range(0, pts.shape[0], chunk_size):
+            j = min(i + chunk_size, pts.shape[0])
+            model_values[i:j] = model(pts[i:j]).squeeze()
+    
+    # Compute true signed distances in chunks
+    true_distances = torch.empty(pts.shape[0], device=device, dtype=torch.float32)
+    
+    with torch.no_grad():
+        for i in range(0, pts.shape[0], chunk_size):
+            j = min(i + chunk_size, pts.shape[0])
+            true_distances[i:j] = bspline_signed_distance_vectorized(
+                pts[i:j], ctrl_pts, degree=degree, device=device
+            )
+    
+    # Compute absolute error
+    errors = torch.abs(model_values - true_distances)
+    Z = errors.cpu().numpy().reshape(N, N)
+    
+    plt.figure(figsize=(8, 8))
+    plt.contourf(X, Y, Z, levels=50, cmap='plasma')
+    plt.colorbar(label='Absolute Error')
+    
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.title('Model Error Map')
+    plt.gca().set_aspect('equal', adjustable='box')
+    plt.grid(True)
+    plt.show()
 
 def plot_bspline_curve(control_points, degree=3, num_samples=400, closed=True, device=None,
                         show_control_points=True, curve_color='C0', control_color='C3', linewidth=2):

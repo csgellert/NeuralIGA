@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 import datetime
-import Geomertry
+#import Geomertry
 import math
 import geometry_bspline as bsp_geom
 class NeuralNetwork(nn.Module):
@@ -645,9 +645,11 @@ def load_models(model_type="siren_model"):
         model.eval()
         return model
     elif model_type == "analitical_model":
+        import Geomertry
         model = Geomertry.AnaliticalDistanceCircle()
         return model
     elif model_type == "analitical_model2":
+        import Geomertry
         model = Geomertry.AnaliticalDistanceLshape()
         return model
     elif model_type == "double_circle_test":

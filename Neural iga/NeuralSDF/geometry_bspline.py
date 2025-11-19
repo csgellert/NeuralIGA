@@ -232,47 +232,124 @@ def distance_points_to_bspline_curve_vectorized(query_points, control_points, de
 def point_in_polygon_winding_number(points, polygon_vertices):
     """
     Determine if points are inside polygon using winding number algorithm.
-    More robust than ray casting for complex polygons.
-    
-    Args:
-        points: tensor of shape (num_points, 2) - query points
-        polygon_vertices: tensor of shape (num_vertices, 2) - polygon vertices
-    
-    Returns:
-        tensor of shape (num_points,) - boolean mask (True if inside)
+    This reference implementation uses Python loops and is kept for backwards compatibility.
+    Prefer point_in_polygon_winding_number_batched for performance.
     """
     num_points = points.shape[0]
     num_vertices = polygon_vertices.shape[0]
-    
+
     winding_numbers = torch.zeros(num_points, device=points.device)
-    
+
     for i in range(num_vertices):
         v1 = polygon_vertices[i]
         v2 = polygon_vertices[(i + 1) % num_vertices]
-        
-        # Check if edge crosses upward
+
         upward = (v1[1] <= points[:, 1]) & (points[:, 1] < v2[1])
-        
-        # Check if edge crosses downward  
         downward = (v2[1] <= points[:, 1]) & (points[:, 1] < v1[1])
-        
-        # For crossing edges, check if point is left of edge
+
         for j in range(num_points):
             if upward[j]:
-                # Compute cross product to determine side
                 cross = (v2[0] - v1[0]) * (points[j, 1] - v1[1]) - (v2[1] - v1[1]) * (points[j, 0] - v1[0])
-                if cross > 0:  # Point is left of edge
+                if cross > 0:
                     winding_numbers[j] += 1
             elif downward[j]:
                 cross = (v2[0] - v1[0]) * (points[j, 1] - v1[1]) - (v2[1] - v1[1]) * (points[j, 0] - v1[0])
-                if cross < 0:  # Point is left of edge
+                if cross < 0:
                     winding_numbers[j] -= 1
-    
+
     return winding_numbers != 0
 
-def bspline_signed_distance_vectorized(query_points, control_points, degree=3, 
-                                     num_curve_samples=1000, num_polygon_samples=500, 
-                                     device=None):
+def point_in_polygon_winding_number_batched(points, polygon_vertices, batch_size=200000):
+    """
+    Vectorized and batched winding number test.
+
+    Args:
+        points: (N,2) tensor
+        polygon_vertices: (M,2) tensor defining a closed polygon (last edge wraps to first)
+        batch_size: number of points to process per batch to control memory
+
+    Returns:
+        inside_mask: (N,) boolean tensor
+    """
+    device = points.device
+    dtype = points.dtype
+
+    v1 = polygon_vertices
+    v2 = torch.roll(polygon_vertices, shifts=-1, dims=0)
+
+    v1x = v1[:, 0].to(dtype)
+    v1y = v1[:, 1].to(dtype)
+    v2x = v2[:, 0].to(dtype)
+    v2y = v2[:, 1].to(dtype)
+
+    dvx = (v2x - v1x)
+    dvy = (v2y - v1y)
+
+    E = v1.shape[0]
+    N = points.shape[0]
+
+    inside = torch.empty(N, dtype=torch.bool, device=device)
+
+    for i in range(0, N, batch_size):
+        j = min(i + batch_size, N)
+        pb = points[i:j].to(device, dtype=dtype)
+        px = pb[:, 0].unsqueeze(1)  # (B,1)
+        py = pb[:, 1].unsqueeze(1)  # (B,1)
+
+        v1y_row = v1y.unsqueeze(0)  # (1,E)
+        v2y_row = v2y.unsqueeze(0)
+        v1x_row = v1x.unsqueeze(0)
+
+        upward = (v1y_row <= py) & (py < v2y_row)      # (B,E)
+        downward = (v2y_row <= py) & (py < v1y_row)    # (B,E)
+
+        # Cross product to determine sidedness for each point-edge pair
+        cross = dvx.unsqueeze(0) * (py - v1y_row) - dvy.unsqueeze(0) * (px - v1x_row)  # (B,E)
+
+        inc = (upward & (cross > 0)).to(torch.int32)
+        dec = (downward & (cross < 0)).to(torch.int32)
+        winding = (inc - dec).sum(dim=1)
+
+        inside[i:j] = winding != 0
+
+    return inside
+
+def distance_points_to_curve_samples_batched(query_points, curve_points, batch_size=200000):
+    """
+    Compute minimal euclidean distance from each query point to a set of curve samples, in batches.
+
+    Args:
+        query_points: (N,2) tensor
+        curve_points: (S,2) tensor
+        batch_size: number of query points per batch
+
+    Returns:
+        min_distances: (N,) tensor of minimal distances
+    """
+    device = query_points.device
+    dtype = query_points.dtype
+
+    N = query_points.shape[0]
+    min_d = torch.empty(N, device=device, dtype=dtype)
+
+    # Ensure same dtype
+    curve_points = curve_points.to(device=device, dtype=dtype)
+
+    for i in range(0, N, batch_size):
+        j = min(i + batch_size, N)
+        qb = query_points[i:j].to(device=device, dtype=dtype)
+        # torch.cdist is often well-optimized on GPU and CPU
+        dists = torch.cdist(qb, curve_points)  # (B, S)
+        min_d[i:j], _ = torch.min(dists, dim=1)
+
+    return min_d
+
+def bspline_signed_distance_vectorized(query_points, control_points, degree=3,
+                                     num_curve_samples=1000, num_polygon_samples=500,
+                                     device=None, point_batch_size=200000,
+                                     precomputed_curve_points=None,
+                                     precomputed_polygon_vertices=None,
+                                     precomputed_knots=None):
     """
     Compute signed distance from query points to a closed B-spline contour.
     Positive distances indicate points inside the contour, negative for outside.
@@ -297,26 +374,39 @@ def bspline_signed_distance_vectorized(query_points, control_points, degree=3,
     
     if device is None:
         device = query_points.device
-    
-    query_points = query_points.to(device)
-    control_points = control_points.to(device)
-    
-    # Compute minimum distances to curve
-    min_distances = distance_points_to_bspline_curve_vectorized(
-        query_points, control_points, degree, num_curve_samples, device
-    )
-    
-    # Determine inside/outside using polygon approximation
-    knots = create_knot_vector(control_points.shape[0], degree, closed=True)
-    knots = knots.to(device)
-    
-    # Sample polygon vertices for inside/outside test
-    t_polygon = torch.linspace(0, 1, num_polygon_samples + 1, device=device)[:-1]  # Exclude duplicate endpoint
-    polygon_vertices = evaluate_bspline_curve_vectorized(t_polygon, control_points, knots, degree, device)
-    
-    # Test if points are inside
-    inside_mask = point_in_polygon_winding_number(query_points, polygon_vertices)
-    
+
+    # Use float32 for speed/memory unless higher precision is explicitly provided
+    dtype = torch.float32 if query_points.dtype == torch.float32 else query_points.dtype
+
+    query_points = query_points.to(device=device, dtype=dtype)
+    control_points = control_points.to(device=device, dtype=dtype)
+
+    # Prepare knots
+    if precomputed_knots is not None:
+        knots = precomputed_knots.to(device=device, dtype=dtype)
+    else:
+        knots = create_knot_vector(control_points.shape[0], degree, closed=True).to(device=device, dtype=dtype)
+
+    # Curve samples for distances
+    if precomputed_curve_points is not None:
+        curve_points = precomputed_curve_points.to(device=device, dtype=dtype)
+    else:
+        t_values = torch.linspace(knots[degree], knots[-degree-1], num_curve_samples, device=device, dtype=dtype)
+        curve_points = evaluate_bspline_curve_vectorized(t_values, control_points, knots, degree, device)
+
+    # Polygon vertices for inside test (can be coarser)
+    if precomputed_polygon_vertices is not None:
+        polygon_vertices = precomputed_polygon_vertices.to(device=device, dtype=dtype)
+    else:
+        t_polygon = torch.linspace(knots[degree], knots[-degree-1], num_polygon_samples, device=device, dtype=dtype)
+        polygon_vertices = evaluate_bspline_curve_vectorized(t_polygon, control_points, knots, degree, device)
+
+    # Compute minimum distances to the curve samples in batches
+    min_distances = distance_points_to_curve_samples_batched(query_points, curve_points, batch_size=point_batch_size)
+
+    # Batched winding number inside/outside test
+    inside_mask = point_in_polygon_winding_number_batched(query_points, polygon_vertices, batch_size=point_batch_size)
+
     # Apply sign: positive if inside, negative if outside
     signed_distances = torch.where(inside_mask, min_distances, -min_distances)
     
@@ -553,7 +643,7 @@ def plot_normal_vectors_on_bspline(control_points, degree=3, num_vectors=20, vec
     plt.grid(True)
     plt.show()
 
-def plot_model_error_map(model, ctrl_pts, degree=1, N=200, extent=(-1.1, 1.1, -1.1, 1.1), device=None):
+def plot_model_error_map(model, ctrl_pts, degree=1, N=200, extent=(-1.1, 1.1, -1.1, 1.1), use_log=False, device=None):
     """
     Plot error map of a neural implicit model against B-spline signed distance function.
     
@@ -565,6 +655,7 @@ def plot_model_error_map(model, ctrl_pts, degree=1, N=200, extent=(-1.1, 1.1, -1
         device: torch device
     """
     import matplotlib.pyplot as plt
+    from matplotlib import ticker
     
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -598,13 +689,16 @@ def plot_model_error_map(model, ctrl_pts, degree=1, N=200, extent=(-1.1, 1.1, -1
             true_distances[i:j] = bspline_signed_distance_vectorized(
                 pts[i:j], ctrl_pts, degree=degree, device=device
             )
-    
+    plt.figure(figsize=(8, 8))
     # Compute absolute error
     errors = torch.abs(model_values - true_distances)
     Z = errors.cpu().numpy().reshape(N, N)
+    if use_log:
+        plt.contourf(X, Y, Z, levels=50, cmap='plasma')
+    else:
+        plt.contourf(X, Y, Z, levels=50, locator=ticker.LogLocator(), cmap='plasma')
     
-    plt.figure(figsize=(8, 8))
-    plt.contourf(X, Y, Z, levels=50, cmap='plasma')
+    
     plt.colorbar(label='Absolute Error')
     
     plt.xlabel('x')

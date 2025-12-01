@@ -20,6 +20,7 @@ class NeuralNetwork(nn.Module):
         self.lr_scheduler = None
         self.error_distribution_history = []
         self.weight_distribution_history = []
+        self.SDF_history = []
         self.error_history = {
             "L1": [],
             "L2": [],
@@ -81,6 +82,7 @@ class Siren(nn.Module):
         self.loss_history = []
         self.error_distribution_history = []
         self.weight_distribution_history = []
+        self.SDF_history = []
         self.optimizer = None
         self.name = "SIREN"
         self.lr_scheduler = None
@@ -119,6 +121,112 @@ class Siren(nn.Module):
         #coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
         output = self.net(coords)
         return output
+class Siren_old(nn.Module):
+    def __init__(self, in_features, hidden_features, hidden_layers, out_features, outermost_linear=False,
+                 first_omega_0=30, hidden_omega_0=30):
+        super().__init__()
+
+        self.net = []
+        self.loss_history = []
+        self.error_distribution_history = []
+        self.weight_distribution_history = []
+        self.SDF_history = []
+        self.optimizer = None
+        self.name = "SIREN_old"
+        self.lr_scheduler = None
+        self.error_history = {
+            "L1": [],
+            "L2": [],
+            "Linf": []
+        }
+
+        self.net.append(SineLayer(in_features, hidden_features,
+                                  is_first=True, omega_0=first_omega_0))
+
+        for i in range(hidden_layers):
+            self.net.append(SineLayer(hidden_features, hidden_features,
+                                      is_first=False, omega_0=hidden_omega_0))
+        #self.net.append(nn.Linear(hidden_features,hidden_features))
+        #self.net.append(nn.Softplus(100))
+
+        if outermost_linear:
+            final_linear = nn.Linear(hidden_features, out_features)
+
+            with torch.no_grad():
+                final_linear.weight.uniform_(-np.sqrt(6 / hidden_features) / hidden_omega_0,
+                                              np.sqrt(6 / hidden_features) / hidden_omega_0)
+
+            self.net.append(final_linear)
+        else:
+            self.net.append(SineLayer(hidden_features, out_features,
+                                      is_first=False, omega_0=hidden_omega_0))
+
+        self.net = nn.Sequential(*self.net)
+
+
+    def forward(self, coords):
+        #coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
+        output = self.net(coords)
+        return output
+class Siren_SC(nn.Module):
+    def __init__(self, architecture, outermost_linear=False,
+                 first_omega_0=60, hidden_omega_0=60):
+        #siren with skip connection
+        super().__init__()
+        self.architecture = architecture
+        in_features = architecture[0]
+        out_features = architecture[-1]
+        hidden_layers = len(architecture)-2
+
+        self.loss_history = []
+        self.error_distribution_history = []
+        self.weight_distribution_history = []
+        self.SDF_history = []
+        self.optimizer = None
+        self.name = "SIREN_SC"
+        self.lr_scheduler = None
+        self.error_history = {
+            "L1": [],
+            "L2": [],
+            "Linf": []
+        }
+
+        self.net = []
+        self.net.append(SineLayer(in_features, architecture[1],
+                                  is_first=True, omega_0=first_omega_0))
+
+        for i in range(hidden_layers-1):
+            self.net.append(SineLayer(architecture[i+1],architecture[i+2] ,
+                                      is_first=False, omega_0=hidden_omega_0))
+        self.net.append(SineLayer(architecture[-2],architecture[-2] ,
+                                      is_first=False, omega_0=hidden_omega_0))
+
+        if outermost_linear:
+            final_linear = nn.Linear(architecture[-2], out_features)
+
+            with torch.no_grad():
+                final_linear.weight.uniform_(-np.sqrt(6 / architecture[-2]) / hidden_omega_0,
+                                              np.sqrt(6 / architecture[-2]) / hidden_omega_0)
+
+            self.net.append(final_linear)
+        else:
+            self.net.append(SineLayer(architecture[-2], out_features,
+                                      is_first=False, omega_0=hidden_omega_0))
+
+        self.net = nn.Sequential(*self.net)
+
+
+    def forward(self, coords):
+        #forward with skip connection
+        x_orig = coords
+        for i, layer in enumerate(self.net):
+            x_new = layer(x)
+            if i % 2 == 1 and i < len(self.net) - 2:  # after each SineLayer except the last
+                x = x_orig + x_new  # skip connection
+            else:
+                x = x_new
+        return x
+
 class SoftSine(nn.Module):
     def __init__(self, architecture, outermost_linear=False,
                 first_omega_0=60, hidden_omega_0=60):
@@ -130,6 +238,7 @@ class SoftSine(nn.Module):
 
         self.error_distribution_history = []
         self.weight_distribution_history = []
+        self.SDF_history = []
         self.loss_history = []
         self.error_history = {
             "L1": [],
@@ -215,6 +324,7 @@ class PE_Relu(nn.Module):
         }
         self.error_distribution_history = []
         self.weight_distribution_history = []
+        self.SDF_history = []
         self.optimizer = None
         self.name = "PE_ReLU"
         self.lr_scheduler = None
@@ -248,6 +358,7 @@ class PE_Siren(nn.Module):
         self.lr_scheduler = None
         self.error_distribution_history = []
         self.weight_distribution_history = []
+        self.SDF_history = []
         self.error_history = {
             "L1": [],
             "L2": [],
@@ -369,24 +480,39 @@ def generate_bspline_data(num_samples, case=1, device=None, data_gen_params={}):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if case == 1: #star shape
         margain = 0.1
-        x = torch.rand(num_samples, 2, device=device) * (2+margain) - 1-margain  # Range [-1, 1]
+        x = torch.rand(num_samples, 2, device=device) * (2+margain*2) - 1-margain  # Range [-1, 1]
         star_cp = bsp_geom.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=1)
         y = bsp_geom.bspline_signed_distance_vectorized(x, star_cp, device=device)
         return x, y.view(-1, 1)
     if case == 2: #pentagon shape
         margain = 0.1
-        x = torch.rand(num_samples, 2, device=device) * (2+margain) - 1-margain  # Range [-1, 1]
+        x = torch.rand(num_samples, 2, device=device) * (2+margain*2) - 1-margain  # Range [-1, 1]
         pentagon_cp = bsp_geom.create_polygon_bspline_control_points(num_vertices=5,degree=1,device=device)
         y = bsp_geom.bspline_signed_distance_vectorized(x, pentagon_cp, degree=1, device=device)
         return x, y.view(-1, 1)
     elif case == 3: #rounded_star
         margain = 0.1
-        x = torch.rand(num_samples, 2, device=device) * (2+margain) - 1-margain  # Range [-1, 1]
+        x = torch.rand(num_samples, 2, device=device) * (2+margain*2) - 1-margain  # Range [-1, 1]
         rounded_star_cp = bsp_geom.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=2)
         y = bsp_geom.bspline_signed_distance_vectorized(x, rounded_star_cp, degree=2, device=device)
         return x, y.view(-1, 1)
     else:
         raise NotImplementedError
+def generate_bspline_boundary_points(num_boundary_points, case=1, device=None, data_gen_params={}):
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if case == 1: #star shape
+        star_cp = bsp_geom.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=1)
+        boundary_points = bsp_geom.generate_points_on_curve(control_points=star_cp, num_points=num_boundary_points, degree=1, device=device)
+        return boundary_points
+    if case == 2: #pentagon shape
+        pentagon_cp = bsp_geom.create_polygon_bspline_control_points(num_vertices=5,degree=1,device=device)
+        boundary_points = bsp_geom.generate_points_on_curve(control_points=pentagon_cp, num_points=num_boundary_points, degree=1, device=device)
+        return boundary_points
+    elif case == 3: #rounded_star
+        rounded_star_cp = bsp_geom.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=2)
+        boundary_points = bsp_geom.generate_points_on_curve(control_points=rounded_star_cp, num_points=num_boundary_points, degree=2, device=device)
+        return boundary_points
 def evaluate_bspline_data_gen(grid, case=1, device=None, data_gen_params={}):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -440,7 +566,8 @@ def train_models(model_list, num_epochs = 100, batch_size=10000, fun_num=1, devi
 def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun_num=1, *, device=None,
                               crt = nn.L1Loss(),use_scheduler = False, create_error_history = False,eikon_coeff=0.0,boundry_coeff=0.0,
                               xi_coeff=0.0,boundary_norm_coeff=0.0, evaluation_coeff=1, data_gen_mode='standard',data_gen_params={},
-                              create_error_distribution_hystory = False, create_weight_distribution_history = False, hytory_after_epochs = 100):
+                              create_error_distribution_hystory = False, create_weight_distribution_history = False, hytory_after_epochs = 100, error_distribution_resolution=50,
+                              create_SDF_history = False):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')   
     criterion = crt
@@ -472,7 +599,11 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                 eikonal_term = ((grads.norm(dim=1) - 1) ** 2).mean()
                 loss += eikon_coeff * eikonal_term
             if boundry_coeff > 0.0:
-                raise NotImplementedError("Boundary term not implemented in this snippet.")
+                #generating boundary points
+                bndr_pts = generate_bspline_boundary_points(num_boundary_points=batch_size, case=fun_num, device=device, data_gen_params=data_gen_params)
+                bndr_pred = model(bndr_pts)
+                boundary_term = (bndr_pred ** 2).mean()
+                loss += boundry_coeff * boundary_term
             if xi_coeff > 0.0:
                 xi_term = torch.exp(-100 * torch.abs(pred)).mean()
                 loss += xi_coeff * xi_term
@@ -497,7 +628,7 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
             print(f"Epoch [{epoch}], Losses: " + 
                   ", ".join([f"{model.name}: {model.loss_history[-1]:.6f}" for model in model_list]))
         if create_error_distribution_hystory and (epoch + 1) % hytory_after_epochs == 0:
-            resolution = 50
+            resolution = error_distribution_resolution
             for model in model_list:
                 X, Y = torch.meshgrid(torch.linspace(-1, 1, resolution, device=device),
                                       torch.linspace(-1, 1, resolution, device=device))
@@ -523,6 +654,16 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                         weights = layer.linear.weight.data.cpu().numpy().flatten()
                         weight_distributions.append(weights)
                 model.weight_distribution_history.append(weight_distributions)
+        if create_SDF_history and (epoch + 1) % hytory_after_epochs == 0:
+            resolution = error_distribution_resolution
+            for model in model_list:
+                X, Y = torch.meshgrid(torch.linspace(-1, 1, resolution, device=device),
+                                      torch.linspace(-1, 1, resolution, device=device))
+                grid_points = torch.stack([X.ravel(), Y.ravel()], dim=-1)
+                with torch.no_grad():
+                    predictions = model(grid_points)
+                    sdf_values = predictions.cpu().numpy().reshape(resolution, resolution)
+                    model.SDF_history.append(sdf_values)
 
 def plot_model_weight_per_layer_hyst(model):
     # Plot weight histograms for each layer in the model
@@ -546,13 +687,17 @@ def plot_model_weight_per_layer_hyst(model):
             plt.grid(True)
             plt.show()
 
-def create_animation_error_distribution(model, interval=200, save_path=None, use_log_scale=False):
+def create_animation_error_distribution(model, interval=200, save_path=None, use_log_scale=False, skip_initial_frames=0, adaptive_scaling=False):
     fig, ax = plt.subplots()
     resolution = model.error_distribution_history[0].shape[0]
-    if use_log_scale:
-        im = ax.imshow(np.log(model.error_distribution_history[0]), extent=(-1, 1, -1, 1), origin='lower', cmap='hot')
+    if skip_initial_frames > 0:
+        error = model.error_distribution_history[skip_initial_frames:]
     else:
-        im = ax.imshow(model.error_distribution_history[0], extent=(-1, 1, -1, 1), origin='lower', cmap='hot')
+        error = model.error_distribution_history
+    if use_log_scale:
+        im = ax.imshow(np.log(error[0]), extent=(-1, 1, -1, 1), origin='lower', cmap='hot')
+    else:
+        im = ax.imshow(error[0], extent=(-1, 1, -1, 1), origin='lower', cmap='hot')
     ax.set_title('Log(Error Distribution Over Training)' if use_log_scale else 'Error Distribution Over Training')
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
@@ -560,12 +705,89 @@ def create_animation_error_distribution(model, interval=200, save_path=None, use
 
 
     def update(frame):
-        im.set_array(model.error_distribution_history[frame])
+        arr = error[frame]
+        if use_log_scale:
+            arr = np.log(np.maximum(arr, 1e-12))  # prevents log(0)
+        if adaptive_scaling:
+            im.set_clim(vmin=arr.min(), vmax=arr.max())
+        im.set_array(arr)
         ax.set_title(f'Error Distribution at Epoch {frame * 100}')
         return [im]
 
-    ani = FuncAnimation(fig, update, frames=len(model.error_distribution_history), interval=interval, blit=True)
+    ani = FuncAnimation(fig, update, frames=len(error), interval=interval, blit=True)
+    if save_path:
+        ani.save(save_path, writer='imagemagick')
 
+    plt.show()
+def create_animation_error_contourf(model, interval=200, save_path=None, use_log_scale=False, skip_initial_frames=0, adaptive_scaling=False, plot_cntr = False):
+    fig, ax = plt.subplots()
+    resolution = model.error_distribution_history[0].shape[0]
+    X, Y = np.meshgrid(np.linspace(-1, 1, resolution), np.linspace(-1, 1, resolution))
+    if skip_initial_frames > 0:
+        error = model.error_distribution_history[skip_initial_frames:]
+    else:
+        error = model.error_distribution_history
+    if use_log_scale:
+        Z = np.log(np.maximum(error[0], 1e-12))  # prevents log(0)
+    else:
+        Z = error[0]
+    cont = ax.contourf(X, Y, Z, levels=50, cmap='hot')
+    fig.colorbar(cont, ax=ax)
+    ax.set_title('Log(Error Contour Over Training)' if use_log_scale else 'Error Contour Over Training')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+
+    def update(frame):
+        arr = error[frame]
+        if use_log_scale:
+            arr = np.log(np.maximum(arr, 1e-12))  # prevents log(0)
+        ax.clear()
+        cont = ax.contourf(X, Y, arr, levels=50, cmap='hot')
+        if adaptive_scaling:
+            cont.set_clim(vmin=arr.min(), vmax=arr.max())
+        if plot_cntr and len(model.SDF_history)>0:
+            #plot zero level set
+            cntr = ax.contour(X, Y, model.SDF_history[frame], levels=[0], colors='blue', linewidths=2)
+        ax.set_title(f'Error Contour at Epoch {frame * 100}')
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        return [cont]
+
+    ani = FuncAnimation(fig, update, frames=len(error), interval=interval, blit=True)
+    if save_path:
+        ani.save(save_path, writer='imagemagick')
+
+    plt.show()
+def create_animation_SDF_contourf(model, interval=200, save_path=None, skip_initial_frames=0, adaptive_scaling=False,plot_cntr = False):
+    fig, ax = plt.subplots()
+    resolution = model.SDF_history[0].shape[0]
+    X, Y = np.meshgrid(np.linspace(-1, 1, resolution), np.linspace(-1, 1, resolution))
+    if skip_initial_frames > 0:
+        sdf_values = model.SDF_history[skip_initial_frames:]
+    else:
+        sdf_values = model.SDF_history
+    Z = sdf_values[0]
+    cont = ax.contourf(X, Y, Z, levels=50, cmap='viridis')
+    fig.colorbar(cont, ax=ax)
+    ax.set_title('SDF Contour Over Training')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+
+    def update(frame):
+        arr = sdf_values[frame]
+        ax.clear()
+        cont = ax.contourf(X, Y, arr, levels=50, cmap='viridis')
+        if adaptive_scaling:
+            cont.set_clim(vmin=arr.min(), vmax=arr.max())
+        if plot_cntr:
+            #plot zero level set
+            cntr = ax.contour(X, Y, arr, levels=[0], colors='red', linewidths=2)
+        ax.set_title(f'SDF Contour at Epoch {frame * 100}')
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        return [cont]
+
+    ani = FuncAnimation(fig, update, frames=len(sdf_values), interval=interval, blit=True)
     if save_path:
         ani.save(save_path, writer='imagemagick')
 

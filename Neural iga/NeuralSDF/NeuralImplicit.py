@@ -168,6 +168,47 @@ class Siren_old(nn.Module):
         #coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
         output = self.net(coords)
         return output
+class SIRELU(nn.Module):
+    def __init__(self, architecture, first_omega_0=60):
+        super().__init__()
+        self.architecture = architecture
+        in_features = architecture[0]
+        out_features = architecture[-1]
+        hidden_layers = len(architecture)-2
+
+        self.loss_history = []
+        self.error_distribution_history = []
+        self.weight_distribution_history = []
+        self.SDF_history = []
+        self.optimizer = None
+        self.name = "SIRELU"
+        self.lr_scheduler = None
+        self.error_history = {
+            "L1": [],
+            "L2": [],
+            "Linf": []
+        }
+
+        self.net = []
+        self.net.append(SineLayer(in_features, architecture[1],
+                                  is_first=True, omega_0=first_omega_0))
+
+        for i in range(hidden_layers-1):
+            self.net.append(nn.Linear(architecture[i+1], architecture[i+2]))
+            if i < len(architecture) - 3:
+                self.net.append(nn.ReLU())
+        self.net.append(nn.Linear(architecture[-2],architecture[-2] ))
+        self.net.append(nn.ReLU())
+        self.net.append(nn.Linear(architecture[-2], out_features))
+        
+
+        self.net = nn.Sequential(*self.net)
+
+
+    def forward(self, coords):
+        #coords = coords.clone().detach().requires_grad_(True) # allows to take derivative w.r.t. input
+        output = self.net(coords)
+        return output
 class Siren_SC(nn.Module):
     def __init__(self, architecture, outermost_linear=False,
                  first_omega_0=60, hidden_omega_0=60):
@@ -496,6 +537,22 @@ def generate_bspline_data(num_samples, case=1, device=None, data_gen_params={}):
         rounded_star_cp = bsp_geom.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=2)
         y = bsp_geom.bspline_signed_distance_vectorized(x, rounded_star_cp, degree=2, device=device)
         return x, y.view(-1, 1)
+    elif case == 4: #L-shape
+        margain = 0.1
+        x = torch.rand(num_samples, 2, device=device) * (2+margain*2) - 1-margain  # Range [-1, 1]
+        L_shape_cp = bsp_geom.create_L_shape_bspline_control_points(degree=1, device=device)
+        y = bsp_geom.bspline_signed_distance_vectorized(x, L_shape_cp, degree=1, device=device)
+        return x, y.view(-1, 1)
+    elif case == 5: #n-gon
+        margain = 0.1
+        if 'num_vertices' in data_gen_params:
+            num_vertices = data_gen_params['num_vertices']
+        else:
+            num_vertices = 3
+        x = torch.rand(num_samples, 2, device=device) * (2+margain*2) - 1-margain  # Range [-1, 1]
+        n_gon_cp = bsp_geom.create_polygon_bspline_control_points(num_vertices=num_vertices,degree=1,device=device)
+        y = bsp_geom.bspline_signed_distance_vectorized(x, n_gon_cp, degree=1, device=device)
+        return x, y.view(-1, 1)
     else:
         raise NotImplementedError
 def generate_bspline_boundary_points(num_boundary_points, case=1, device=None, data_gen_params={}):
@@ -513,6 +570,20 @@ def generate_bspline_boundary_points(num_boundary_points, case=1, device=None, d
         rounded_star_cp = bsp_geom.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=2)
         boundary_points = bsp_geom.generate_points_on_curve(control_points=rounded_star_cp, num_points=num_boundary_points, degree=2, device=device)
         return boundary_points
+    elif case == 4: #L-shape
+        L_shape_cp = bsp_geom.create_L_shape_bspline_control_points(degree=1, device=device)
+        boundary_points = bsp_geom.generate_points_on_curve(control_points=L_shape_cp, num_points=num_boundary_points, degree=1, device=device)
+        return boundary_points
+    elif case == 5: #n-gon
+        if 'num_vertices' in data_gen_params:
+            num_vertices = data_gen_params['num_vertices']
+        else:
+            num_vertices = 3
+        n_gon_cp = bsp_geom.create_polygon_bspline_control_points(num_vertices=num_vertices,degree=1,device=device)
+        boundary_points = bsp_geom.generate_points_on_curve(control_points=n_gon_cp, num_points=num_boundary_points, degree=1, device=device)
+        return boundary_points
+    else:
+        raise NotImplementedError
 def evaluate_bspline_data_gen(grid, case=1, device=None, data_gen_params={}):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -527,6 +598,18 @@ def evaluate_bspline_data_gen(grid, case=1, device=None, data_gen_params={}):
     if case == 3: #rounded_star
         rounded_star_cp = bsp_geom.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=2)
         y = bsp_geom.bspline_signed_distance_vectorized(grid, rounded_star_cp, degree=2, device=device)
+        return y.view(-1, 1)
+    elif case == 4: #L-shape
+        L_shape_cp = bsp_geom.create_L_shape_bspline_control_points(degree=1, device=device)
+        y = bsp_geom.bspline_signed_distance_vectorized(grid, L_shape_cp, degree=1, device=device)
+        return y.view(-1, 1)
+    elif case == 5: #n-gon
+        if 'num_vertices' in data_gen_params:
+            num_vertices = data_gen_params['num_vertices']
+        else:
+            num_vertices = 3
+        n_gon_cp = bsp_geom.create_polygon_bspline_control_points(num_vertices=num_vertices,degree=1,device=device)
+        y = bsp_geom.bspline_signed_distance_vectorized(grid, n_gon_cp, degree=1, device=device)
         return y.view(-1, 1)
     else:
         raise NotImplementedError
@@ -626,7 +709,7 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                     model.error_history["Linf"].append(Linf_error)  
         if (epoch + 1) % report_interval == 0 or epoch == 0:
             print(f"Epoch [{epoch}], Losses: " + 
-                  ", ".join([f"{model.name}: {model.loss_history[-1]:.6f}" for model in model_list]))
+                  ", ".join([f"{model.name}: {model.loss_history[-1]}" for model in model_list]))
         if create_error_distribution_hystory and (epoch + 1) % hytory_after_epochs == 0:
             resolution = error_distribution_resolution
             for model in model_list:

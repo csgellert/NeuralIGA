@@ -505,6 +505,28 @@ def create_polygon_bspline_control_points(num_vertices, degree=1, device=None):
     control_points = torch.cat([vertices, vertices[:degree]])
     return control_points
 
+def create_L_shape_bspline_control_points(degree=1, device=None):
+    """
+    Create control points for an L-shaped B-spline curve.
+    
+    Args:
+        degree: int - degree of the B-spline
+        device: torch device
+    """
+    if device is None:
+        device = torch.device('cpu')
+    
+    control_points = torch.tensor([
+        [0.0, 0.0],
+        [0.0, 1.0],
+        [0.5, 1.0],
+        [0.5, 0.5],
+        [1.0, 0.5],
+        [1.0, 0.0]
+    ], device=device)
+    control_points = torch.cat([control_points, control_points[:degree]])
+    return control_points
+
 def plot_bspline_distance_field(control_points, degree=3, N=400, extent=(-2, 2, -2, 2), 
                                contour=False, levels=20, device=None, chunk_size=200000):
     """

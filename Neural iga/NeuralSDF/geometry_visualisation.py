@@ -57,7 +57,7 @@ def plot_normal_vectors_on_bspline(control_points, degree=3, num_vectors=20, vec
     plt.grid(True)
     plt.show()
 
-def plot_model_error_map(model, ctrl_pts, degree=1, N=200, extent=(-1.1, 1.1, -1.1, 1.1), use_log=False, device=None):
+def plot_model_error_map(model, ctrl_pts, degree=1, N=200, extent=(-1.1, 1.1, -1.1, 1.1), use_log=False, device=None, num_curve_samples=1000):
     """
     Plot error map of a neural implicit model against B-spline signed distance function.
     
@@ -82,11 +82,11 @@ def plot_model_error_map(model, ctrl_pts, degree=1, N=200, extent=(-1.1, 1.1, -1
     X, Y = np.meshgrid(x_vals, y_vals)
     
     # Flatten grid points
-    pts_np = np.vstack([X.ravel(), Y.ravel()]).T.astype(np.float32)
+    pts_np = np.vstack([X.ravel(), Y.ravel()]).T.astype(np.float64)
     pts = torch.from_numpy(pts_np).to(device)
     
     # Compute model predictions in chunks
-    model_values = torch.empty(pts.shape[0], device=device, dtype=torch.float32)
+    model_values = torch.empty(pts.shape[0], device=device, dtype=torch.float64)
     chunk_size = 200000
     
     with torch.no_grad():
@@ -95,19 +95,19 @@ def plot_model_error_map(model, ctrl_pts, degree=1, N=200, extent=(-1.1, 1.1, -1
             model_values[i:j] = model(pts[i:j]).squeeze()
     
     # Compute true signed distances in chunks
-    true_distances = torch.empty(pts.shape[0], device=device, dtype=torch.float32)
+    true_distances = torch.empty(pts.shape[0], device=device, dtype=torch.float64)
     
     with torch.no_grad():
         for i in range(0, pts.shape[0], chunk_size):
             j = min(i + chunk_size, pts.shape[0])
             true_distances[i:j] = bsp_geom.bspline_signed_distance_vectorized(
-                pts[i:j], ctrl_pts, degree=degree, device=device
+                pts[i:j], ctrl_pts, degree=degree, device=device, num_curve_samples=num_curve_samples
             )
     plt.figure(figsize=(8, 8))
     # Compute absolute error
     errors = torch.abs(model_values - true_distances)
     Z = errors.cpu().numpy().reshape(N, N)
-    if use_log:
+    if not use_log:
         plt.contourf(X, Y, Z, levels=50, cmap='plasma')
     else:
         plt.contourf(X, Y, Z, levels=50, locator=ticker.LogLocator(), cmap='plasma')
@@ -119,7 +119,7 @@ def plot_model_error_map(model, ctrl_pts, degree=1, N=200, extent=(-1.1, 1.1, -1
     plt.ylabel('y')
     plt.title('Model Error Map')
     plt.gca().set_aspect('equal', adjustable='box')
-    plt.grid(True)
+    #plt.grid(True)
     plt.show()
 
 def plot_bspline_curve(control_points, degree=3, num_samples=400, closed=True, device=None,
@@ -147,8 +147,8 @@ def plot_bspline_curve(control_points, degree=3, num_samples=400, closed=True, d
 
     # Convert control points to torch tensor on the chosen device
     if isinstance(control_points, np.ndarray):
-        control_points = torch.from_numpy(control_points.astype(np.float32))
-    control_points = control_points.to(device).float()
+        control_points = torch.from_numpy(control_points.astype(np.float64))
+    control_points = control_points.to(device).double()
 
     # Create a uniform knot vector (uses existing helper)
     knots = bsp_geom.create_knot_vector(control_points.shape[0], degree, closed=closed).to(device)
@@ -206,11 +206,11 @@ def plot_bspline_distance_field(control_points, degree=3, N=400, extent=(-2, 2, 
     X, Y = np.meshgrid(x_vals, y_vals)
     
     # Flatten grid points
-    pts_np = np.vstack([X.ravel(), Y.ravel()]).T.astype(np.float32)
+    pts_np = np.vstack([X.ravel(), Y.ravel()]).T.astype(np.float64)
     pts = torch.from_numpy(pts_np).to(device)
     
     # Compute distances in chunks
-    distances = torch.empty(pts.shape[0], device=device, dtype=torch.float32)
+    distances = torch.empty(pts.shape[0], device=device, dtype=torch.float64)
     
     with torch.no_grad():
         for i in range(0, pts.shape[0], chunk_size):
@@ -249,7 +249,7 @@ def plot_bspline_distance_field(control_points, degree=3, N=400, extent=(-2, 2, 
     plt.grid(True, alpha=0.3)
     plt.show()
 
-def plot_laplacian_of_bspline_sdf(model = None, control_points=None, degree=1):
+def plot_laplacian_of_bspline_sdf(model = None, control_points=None, degree=1, num_samples=1000):
     """
     Plot the Laplacian of the signed distance function defined by a B-spline curve.
     
@@ -269,7 +269,7 @@ def plot_laplacian_of_bspline_sdf(model = None, control_points=None, degree=1):
                 #default rounded star shape
                 control_points = geom_defs.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=2)
                 degree = 2
-            Z = bsp_geom.bspline_signed_distance_vectorized(pts_t, control_points, degree=degree).numpy().reshape(N, N)
+            Z = bsp_geom.bspline_signed_distance_vectorized(pts_t, control_points, degree=degree,num_curve_samples=num_samples).numpy().reshape(N, N)
         else:
             Z = model(pts_t).cpu().numpy().reshape(N, N)
     # plot laplace Z

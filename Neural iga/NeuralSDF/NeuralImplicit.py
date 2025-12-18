@@ -45,32 +45,38 @@ def generate_data(num_samples,fun_num = 0, device=None):
         raise NotImplementedError
    
 
-def generate_bspline_data(num_samples, case=1, device=None, data_gen_params={}):
+def generate_bspline_data(num_samples, case=1, device=None, data_gen_params={}, gt_num_curve_samples=1000):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if case == 1: #star shape
         margain = 0.1
         x = torch.rand(num_samples, 2, device=device) * (2+margain*2) - 1-margain  # Range [-1, 1]
         star_cp = geom_defs.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=1)
-        y = bsp_geom.bspline_signed_distance_vectorized(x, star_cp, device=device)
+        y = bsp_geom.bspline_signed_distance_vectorized(x, star_cp, degree=1, device=device, num_curve_samples=gt_num_curve_samples)
         return x, y.view(-1, 1)
     if case == 2: #pentagon shape
         margain = 0.1
         x = torch.rand(num_samples, 2, device=device) * (2+margain*2) - 1-margain  # Range [-1, 1]
         pentagon_cp = geom_defs.create_polygon_bspline_control_points(num_vertices=5,degree=1,device=device)
-        y = bsp_geom.bspline_signed_distance_vectorized(x, pentagon_cp, degree=1, device=device)
+        y = bsp_geom.bspline_signed_distance_vectorized(x, pentagon_cp, degree=1, device=device, num_curve_samples=gt_num_curve_samples)
         return x, y.view(-1, 1)
     elif case == 3: #rounded_star
+        deg = 2
+        num_star_points = 5
+        if 'degree' in data_gen_params:
+            deg = data_gen_params['degree']
+        if 'num_star_points' in data_gen_params:
+            num_star_points = data_gen_params['num_star_points']
         margain = 0.1
         x = torch.rand(num_samples, 2, device=device) * (2+margain*2) - 1-margain  # Range [-1, 1]
-        rounded_star_cp = geom_defs.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=2)
-        y = bsp_geom.bspline_signed_distance_vectorized(x, rounded_star_cp, degree=2, device=device)
+        rounded_star_cp = geom_defs.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=num_star_points, degree=deg)
+        y = bsp_geom.bspline_signed_distance_vectorized(x, rounded_star_cp, degree=deg, device=device, num_curve_samples=gt_num_curve_samples)
         return x, y.view(-1, 1)
     elif case == 4: #L-shape
         margain = 0.1
         x = torch.rand(num_samples, 2, device=device) * (2+margain*2) - 1-margain  # Range [-1, 1]
         L_shape_cp = geom_defs.create_L_shape_bspline_control_points(degree=1, device=device)
-        y = bsp_geom.bspline_signed_distance_vectorized(x, L_shape_cp, degree=1, device=device)
+        y = bsp_geom.bspline_signed_distance_vectorized(x, L_shape_cp, degree=1, device=device, num_curve_samples=gt_num_curve_samples)
         return x, y.view(-1, 1)
     elif case == 5: #n-gon
         margain = 0.1
@@ -80,29 +86,64 @@ def generate_bspline_data(num_samples, case=1, device=None, data_gen_params={}):
             num_vertices = 3
         x = torch.rand(num_samples, 2, device=device) * (2+margain*2) - 1-margain  # Range [-1, 1]
         n_gon_cp = geom_defs.create_polygon_bspline_control_points(num_vertices=num_vertices,degree=1,device=device)
-        y = bsp_geom.bspline_signed_distance_vectorized(x, n_gon_cp, degree=1, device=device)
+        y = bsp_geom.bspline_signed_distance_vectorized(x, n_gon_cp, degree=1, device=device, num_curve_samples=gt_num_curve_samples)
         return x, y.view(-1, 1)
     else:
         raise NotImplementedError
-def generate_bspline_boundary_points(num_boundary_points, case=1, device=None, data_gen_params={}):
+def generate_bspline_boundary_points(num_boundary_points, case=1, device=None, data_gen_params={}, use_importance_sampling = False, importance_sampling_params = {}, gt_num_curve_samples=1000):
+    sigma = 0.01
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if case == 1: #star shape
         star_cp = geom_defs.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=1)
         boundary_points = bsp_geom.generate_points_on_curve(control_points=star_cp, num_points=num_boundary_points, degree=1, device=device)
-        return boundary_points
-    if case == 2: #pentagon shape
+        if use_importance_sampling:
+            #adding gaussian noise to boundary points
+            noise = torch.randn_like(boundary_points, device=device) * sigma
+            boundary_points += noise
+            #clipping points to be within [-1, 1]
+            boundary_points = torch.clamp(boundary_points, -1.0, 1.0)
+            sdf_val = bsp_geom.bspline_signed_distance_vectorized(boundary_points, star_cp, degree=1, device=device, num_curve_samples=gt_num_curve_samples)
+            return boundary_points, sdf_val.view(-1, 1)
+    elif case == 2: #pentagon shape
         pentagon_cp = geom_defs.create_polygon_bspline_control_points(num_vertices=5,degree=1,device=device)
         boundary_points = bsp_geom.generate_points_on_curve(control_points=pentagon_cp, num_points=num_boundary_points, degree=1, device=device)
-        return boundary_points
+        if use_importance_sampling:
+            #adding gaussian noise to boundary points
+            noise = torch.randn_like(boundary_points, device=device) * sigma
+            boundary_points += noise
+            #clipping points to be within [-1, 1]
+            boundary_points = torch.clamp(boundary_points, -1.0, 1.0)
+            sdf_val = bsp_geom.bspline_signed_distance_vectorized(boundary_points, pentagon_cp, degree=1, device=device, num_curve_samples=gt_num_curve_samples)
+            return boundary_points, sdf_val.view(-1, 1)
     elif case == 3: #rounded_star
-        rounded_star_cp = geom_defs.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=2)
-        boundary_points = bsp_geom.generate_points_on_curve(control_points=rounded_star_cp, num_points=num_boundary_points, degree=2, device=device)
-        return boundary_points
+        deg = 2
+        num_star_points = 5
+        if 'degree' in data_gen_params:
+            deg = data_gen_params['degree']
+        if 'num_star_points' in data_gen_params:
+            num_star_points = data_gen_params['num_star_points']
+        rounded_star_cp = geom_defs.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=num_star_points, degree=deg)
+        boundary_points = bsp_geom.generate_points_on_curve(control_points=rounded_star_cp, num_points=num_boundary_points, degree=deg, device=device)
+        if use_importance_sampling:
+            #adding gaussian noise to boundary points
+            noise = torch.randn_like(boundary_points, device=device) * sigma
+            boundary_points += noise
+            #clipping points to be within [-1, 1]
+            boundary_points = torch.clamp(boundary_points, -1.0, 1.0)
+            sdf_val = bsp_geom.bspline_signed_distance_vectorized(boundary_points, rounded_star_cp, degree=deg, device=device, num_curve_samples=gt_num_curve_samples)
+            return boundary_points, sdf_val.view(-1, 1)
     elif case == 4: #L-shape
         L_shape_cp = geom_defs.create_L_shape_bspline_control_points(degree=1, device=device)
         boundary_points = bsp_geom.generate_points_on_curve(control_points=L_shape_cp, num_points=num_boundary_points, degree=1, device=device)
-        return boundary_points
+        if use_importance_sampling:
+            #adding gaussian noise to boundary points
+            noise = torch.randn_like(boundary_points, device=device) * sigma
+            boundary_points += noise
+            #clipping points to be within [-1, 1]
+            boundary_points = torch.clamp(boundary_points, -1.0, 1.0)
+            sdf_val = bsp_geom.bspline_signed_distance_vectorized(boundary_points, L_shape_cp, degree=1, device=device, num_curve_samples=gt_num_curve_samples)
+            return boundary_points, sdf_val.view(-1, 1)
     elif case == 5: #n-gon
         if 'num_vertices' in data_gen_params:
             num_vertices = data_gen_params['num_vertices']
@@ -110,27 +151,41 @@ def generate_bspline_boundary_points(num_boundary_points, case=1, device=None, d
             num_vertices = 3
         n_gon_cp = geom_defs.create_polygon_bspline_control_points(num_vertices=num_vertices,degree=1,device=device)
         boundary_points = bsp_geom.generate_points_on_curve(control_points=n_gon_cp, num_points=num_boundary_points, degree=1, device=device)
-        return boundary_points
+        if use_importance_sampling:
+            #adding gaussian noise to boundary points
+            noise = torch.randn_like(boundary_points, device=device) * sigma
+            boundary_points += noise
+            #clipping points to be within [-1, 1]
+            boundary_points = torch.clamp(boundary_points, -1.0, 1.0)
+            sdf_val = bsp_geom.bspline_signed_distance_vectorized(boundary_points, n_gon_cp, degree=1, device=device, num_curve_samples=gt_num_curve_samples)
+            return boundary_points, sdf_val.view(-1, 1)
     else:
         raise NotImplementedError
-def evaluate_bspline_data_gen(grid, case=1, device=None, data_gen_params={}):
+    return boundary_points
+def evaluate_bspline_data_gen(grid, case=1, device=None, data_gen_params={}, gt_num_curve_samples=1000):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if case == 1: #star shape
         star_cp = geom_defs.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=1)
-        y = bsp_geom.bspline_signed_distance_vectorized(grid, star_cp, degree=1, device=device)
+        y = bsp_geom.bspline_signed_distance_vectorized(grid, star_cp, degree=1, device=device, num_curve_samples=gt_num_curve_samples)
         return y.view(-1, 1)
     if case == 2: #pentagon shape
         pentagon_cp = geom_defs.create_polygon_bspline_control_points(num_vertices=5,degree=1,device=device)
-        y = bsp_geom.bspline_signed_distance_vectorized(grid, pentagon_cp, degree=1, device=device)
+        y = bsp_geom.bspline_signed_distance_vectorized(grid, pentagon_cp, degree=1, device=device, num_curve_samples=gt_num_curve_samples)
         return y.view(-1, 1)
     if case == 3: #rounded_star
-        rounded_star_cp = geom_defs.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=5, degree=2)
-        y = bsp_geom.bspline_signed_distance_vectorized(grid, rounded_star_cp, degree=2, device=device)
+        deg = 2
+        num_star_points = 5
+        if 'degree' in data_gen_params:
+            deg = data_gen_params['degree']
+        if 'num_star_points' in data_gen_params:
+            num_star_points = data_gen_params['num_star_points']
+        rounded_star_cp = geom_defs.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, num_star_points=num_star_points, degree=deg)
+        y = bsp_geom.bspline_signed_distance_vectorized(grid, rounded_star_cp, degree=deg, device=device, num_curve_samples=gt_num_curve_samples)
         return y.view(-1, 1)
     elif case == 4: #L-shape
         L_shape_cp = geom_defs.create_L_shape_bspline_control_points(degree=1, device=device)
-        y = bsp_geom.bspline_signed_distance_vectorized(grid, L_shape_cp, degree=1, device=device)
+        y = bsp_geom.bspline_signed_distance_vectorized(grid, L_shape_cp, degree=1, device=device, num_curve_samples=gt_num_curve_samples)
         return y.view(-1, 1)
     elif case == 5: #n-gon
         if 'num_vertices' in data_gen_params:
@@ -138,7 +193,7 @@ def evaluate_bspline_data_gen(grid, case=1, device=None, data_gen_params={}):
         else:
             num_vertices = 3
         n_gon_cp = geom_defs.create_polygon_bspline_control_points(num_vertices=num_vertices,degree=1,device=device)
-        y = bsp_geom.bspline_signed_distance_vectorized(grid, n_gon_cp, degree=1, device=device)
+        y = bsp_geom.bspline_signed_distance_vectorized(grid, n_gon_cp, degree=1, device=device, num_curve_samples=gt_num_curve_samples)
         return y.view(-1, 1)
     else:
         raise NotImplementedError
@@ -179,7 +234,7 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                               crt = nn.L1Loss(),use_scheduler = False, create_error_history = False,eikon_coeff=0.0,boundry_coeff=0.0,
                               xi_coeff=0.0,boundary_norm_coeff=0.0, evaluation_coeff=1, data_gen_mode='standard',data_gen_params={},
                               create_error_distribution_hystory = False, create_weight_distribution_history = False, hytory_after_epochs = 100, error_distribution_resolution=50,
-                              create_SDF_history = False,
+                              create_SDF_history = False, gt_num_curve_samples = 1000,
                               use_importance_sampling = False, importance_sampling_params = {}, importance_sampling_coeff = 0.0):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')   
@@ -195,7 +250,7 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
         if data_gen_mode == 'standard':
             pts, target = generate_data(batch_size, fun_num=fun_num, device=device) 
         elif data_gen_mode == 'bspline':
-            pts, target = generate_bspline_data(batch_size, case=fun_num, device=device, data_gen_params=data_gen_params)
+            pts, target = generate_bspline_data(batch_size, case=fun_num, device=device, data_gen_params=data_gen_params, gt_num_curve_samples=gt_num_curve_samples)
         else:
             raise NotImplementedError("Data generation mode not implemented")
         for model in model_list:
@@ -223,7 +278,9 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
             if boundary_norm_coeff > 0.0:
                 raise NotImplementedError("Boundary norm term not implemented in this snippet.")
             if use_importance_sampling and importance_sampling_coeff > 0.0:
-                raise NotImplementedError("Importance sampling not implemented in this snippet.")
+                bndr_pts, targets = generate_bspline_boundary_points(num_boundary_points=batch_size, case=fun_num, device=device, data_gen_params=data_gen_params, use_importance_sampling=True, importance_sampling_params=importance_sampling_params, gt_num_curve_samples=gt_num_curve_samples)
+                bndr_pred = model(bndr_pts)
+                loss += importance_sampling_coeff * criterion(bndr_pred, targets)
 
             model.optimizer.zero_grad()
             loss.backward()
@@ -253,7 +310,7 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                     if data_gen_mode == 'standard':
                         raise NotImplementedError("Error distribution history for standard data generation not implemented in this snippet.")
                     elif data_gen_mode == 'bspline':
-                        true_values = evaluate_bspline_data_gen(grid_points, case=fun_num, device=device, data_gen_params=data_gen_params)
+                        true_values = evaluate_bspline_data_gen(grid_points, case=fun_num, device=device, data_gen_params=data_gen_params, gt_num_curve_samples=gt_num_curve_samples)
                         errors = torch.abs(predictions - true_values).cpu().numpy()
                         error_distribution = errors.reshape(resolution, resolution)
                         model.error_distribution_history.append(error_distribution)
@@ -407,3 +464,6 @@ def create_animation_SDF_contourf(model, interval=200, save_path=None, skip_init
         ani.save(save_path, writer='imagemagick')
 
     plt.show()
+
+if __name__ == "__main__":
+    print(generate_bspline_boundary_points(10, case=1, use_importance_sampling = True))

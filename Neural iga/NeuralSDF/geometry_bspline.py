@@ -96,6 +96,63 @@ def bspline_basis_derivatives(t, knots, degree, device=None):
     
     return deriv_basis
 
+def bspline_basis_second_derivatives(t, knots, degree, device=None):
+    """
+    Compute second derivatives of B-spline basis functions.
+    Vectorized implementation for multiple parameter values.
+    
+    Args:
+        t: tensor of shape (num_t,) - parameter values to evaluate at
+        knots: tensor of shape (num_knots,) - knot vector
+        degree: int - degree of B-spline
+        device: torch device
+    
+    Returns:
+        tensor of shape (num_t, num_basis) - second derivative basis function values
+    """
+    if device is None:
+        device = t.device
+    
+    t = t.to(device)
+    knots = knots.to(device)
+    
+    num_t = t.shape[0]
+    num_knots = knots.shape[0]
+    num_basis = num_knots - degree - 1
+    
+    # Compute basis functions of degree-2
+    basis_lower = bspline_basis_functions(t, knots, degree - 2, device)
+    
+    # Initialize second derivative basis functions
+    second_deriv_basis = torch.zeros(num_t, num_basis, device=device)
+    
+    for i in range(num_basis):
+        # Compute coefficients for the second derivative formula
+        # Using the recursive formula: N''_i,p = p * (N'_i,p-1 / (u_i+p - u_i) - N'_i+1,p-1 / (u_i+p+1 - u_i+1))
+        
+        # Left term
+        if i < num_basis and knots[i + degree] != knots[i] and knots[i + degree - 1] != knots[i]:
+            coeff1 = degree * (degree - 1) / ((knots[i + degree] - knots[i]) * (knots[i + degree - 1] - knots[i]))
+            second_deriv_basis[:, i] += coeff1 * basis_lower[:, i]
+        
+        # Middle term (appears twice with different signs)
+        if i + 1 < num_basis:
+            if knots[i + degree] != knots[i] and knots[i + degree] != knots[i + 1]:
+                coeff2 = -degree * (degree - 1) / ((knots[i + degree] - knots[i]) * (knots[i + degree] - knots[i + 1]))
+                second_deriv_basis[:, i] -= coeff2 * basis_lower[:, i + 1]
+            
+            if knots[i + degree + 1] != knots[i + 1] and knots[i + degree] != knots[i + 1]:
+                coeff3 = -degree * (degree - 1) / ((knots[i + degree + 1] - knots[i + 1]) * (knots[i + degree] - knots[i + 1]))
+                second_deriv_basis[:, i] -= coeff3 * basis_lower[:, i + 1]
+        
+        # Right term
+        if i + 2 < num_basis + 2 and i + 1 < num_basis and knots[i + degree + 1] != knots[i + 1] and knots[i + degree] != knots[i + 1]:
+            coeff4 = degree * (degree - 1) / ((knots[i + degree + 1] - knots[i + 1]) * (knots[i + degree] - knots[i + 1]))
+            if i + 2 <= basis_lower.shape[1]:
+                second_deriv_basis[:, i] += coeff4 * basis_lower[:, i + 2] if i + 2 < basis_lower.shape[1] else 0
+    
+    return second_deriv_basis
+
 def bspline_normalvectors(t, control_points, knots, degree, device=None):
     """
     Compute normal vectors of B-spline curve at parameter values t.
@@ -131,6 +188,63 @@ def bspline_normalvectors(t, control_points, knots, degree, device=None):
     normals = normals / norms
     
     return normals
+
+def bspline_curvature(t, control_points, knots, degree, device=None):
+    """
+    Compute curvature of B-spline curve at parameter values t.
+    
+    The curvature is calculated using the formula:
+        κ = |C'(t) x C''(t)| / |C'(t)|³
+    
+    where C'(t) is the first derivative and C''(t) is the second derivative of the curve.
+    For 2D curves, the cross product magnitude is |x'y'' - y'x''|.
+    
+    Args:
+        t: tensor of shape (num_t,) - parameter values to evaluate at
+        control_points: tensor of shape (num_cp, 2) - control points [x, y]
+        knots: tensor of shape (num_knots,) - knot vector
+        degree: int - degree of B-spline (must be >= 2)
+        device: torch device
+    
+    Returns:
+        tensor of shape (num_t,) - curvature values at each parameter value
+    """
+    if degree < 2:
+        raise ValueError("Degree must be at least 2 to compute curvature")
+    
+    if device is None:
+        device = control_points.device
+    
+    t = t.to(device)
+    control_points = control_points.to(device)
+    knots = knots.to(device)
+    
+    # Compute first derivative basis functions
+    deriv_basis = bspline_basis_derivatives(t, knots, degree, device)  # (num_t, num_basis)
+    
+    # Compute second derivative basis functions
+    second_deriv_basis = bspline_basis_second_derivatives(t, knots, degree, device)  # (num_t, num_basis)
+    
+    # Compute first derivatives (tangent vectors)
+    first_derivs = torch.matmul(deriv_basis, control_points)  # (num_t, 2)
+    x_prime = first_derivs[:, 0]
+    y_prime = first_derivs[:, 1]
+    
+    # Compute second derivatives
+    second_derivs = torch.matmul(second_deriv_basis, control_points)  # (num_t, 2)
+    x_double_prime = second_derivs[:, 0]
+    y_double_prime = second_derivs[:, 1]
+    
+    # Compute cross product magnitude for 2D: |x'y'' - y'x''|
+    cross_product = torch.abs(x_prime * y_double_prime - y_prime * x_double_prime)
+    
+    # Compute magnitude of first derivative: sqrt(x'² + y'²)
+    first_deriv_magnitude = torch.sqrt(x_prime**2 + y_prime**2 + 1e-10)  # Add epsilon to avoid division by zero
+    
+    # Compute curvature: κ = |C' × C''| / |C'|³
+    curvature = cross_product / (first_deriv_magnitude**3 + 1e-10)
+    
+    return curvature
 
 def evaluate_bspline_curve_vectorized(t, control_points, knots, degree, device=None):
     """
@@ -486,6 +600,24 @@ if __name__ == "__main__":
     circle_cp = geom_defs.create_circle_bspline_control_points(center=(0, 0), radius=1.0, num_points=14, degree=2)
     star_cp = geom_defs.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5, 
                                                  num_star_points=5, degree=1)
+    #test curvature with plotting
+    degree = 2
+    rounded_star_cp = geom_defs.create_star_bspline_control_points(center=(0, 0), outer_radius=1.0, inner_radius=0.5,num_star_points=5, degree=2)
+    knots = create_knot_vector(rounded_star_cp.shape[0], degree=2, closed=True)
+    t_test = torch.linspace(knots[degree], knots[-degree-1], 1000)
+    curvature_values = bspline_curvature(t_test, rounded_star_cp, knots, degree=2)
+
+    
+    plt.figure()
+    plt.plot(t_test.cpu().numpy(), curvature_values.cpu().numpy())
+    plt.title("Curvature of Rounded Star B-spline Curve (Degree 2)")
+    plt.xlabel("Parameter t")
+    plt.ylabel("Curvature κ")
+    plt.grid()
+    plt.show()
+
+
+
     #print(circle_cp)
     #plot_bspline_curve(circle_cp, degree=2, closed=True)
     # Uncomment to visualize (requires matplotlib)

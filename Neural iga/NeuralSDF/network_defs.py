@@ -428,3 +428,10 @@ class PE_Siren(nn.Module):
         encoded_coords = self.pos_encoding(coords)
         output = self.net(encoded_coords)
         return output
+
+def save_model(model, path):
+    torch.save(model.state_dict(), path)
+def load_model(model, path):
+    model.load_state_dict(torch.load(path))
+    model.eval()
+    return model

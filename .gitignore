@@ -8,6 +8,7 @@
 profiling_stats*
 *.prof_stats
 test*
+quick_benchmark.py
 # 3D data files
 *.obj
 

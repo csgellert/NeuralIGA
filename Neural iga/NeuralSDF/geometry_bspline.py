@@ -20,15 +20,16 @@ def bspline_basis_functions(t, knots, degree, device=None):
     if device is None:
         device = t.device
     
+    dtype = t.dtype  # Preserve input dtype
     t = t.to(device)
-    knots = knots.to(device)
+    knots = knots.to(device=device, dtype=dtype)
     
     num_t = t.shape[0]
     num_knots = knots.shape[0]
     num_basis = num_knots - degree - 1
     
     # Initialize basis functions
-    basis = torch.zeros(num_t, num_basis, device=device)
+    basis = torch.zeros(num_t, num_basis, device=device, dtype=dtype)
     
     # Degree 0 (piecewise constant)
     for i in range(num_basis):
@@ -36,11 +37,11 @@ def bspline_basis_functions(t, knots, degree, device=None):
         # Handle the last interval boundary
         if i == num_basis - 1:
             mask = mask | (t == knots[i + 1])
-        basis[:, i] = mask.float()
+        basis[:, i] = mask.to(dtype)
     
     # Higher degrees using Cox-de Boor recursion
     for d in range(1, degree + 1):
-        new_basis = torch.zeros(num_t, num_basis, device=device)
+        new_basis = torch.zeros(num_t, num_basis, device=device, dtype=dtype)
         for i in range(num_basis):
             # Left term
             if i + d < num_knots and knots[i + d] != knots[i]:
@@ -70,8 +71,9 @@ def bspline_basis_derivatives(t, knots, degree, device=None):
     if device is None:
         device = t.device
     
+    dtype = t.dtype  # Preserve input dtype
     t = t.to(device)
-    knots = knots.to(device)
+    knots = knots.to(device=device, dtype=dtype)
     
     num_t = t.shape[0]
     num_knots = knots.shape[0]
@@ -81,7 +83,7 @@ def bspline_basis_derivatives(t, knots, degree, device=None):
     basis_lower = bspline_basis_functions(t, knots, degree - 1, device)
     
     # Initialize derivative basis functions
-    deriv_basis = torch.zeros(num_t, num_basis, device=device)
+    deriv_basis = torch.zeros(num_t, num_basis, device=device, dtype=dtype)
     
     for i in range(num_basis):
         # Left term
@@ -113,8 +115,9 @@ def bspline_basis_second_derivatives(t, knots, degree, device=None):
     if device is None:
         device = t.device
     
+    dtype = t.dtype  # Preserve input dtype
     t = t.to(device)
-    knots = knots.to(device)
+    knots = knots.to(device=device, dtype=dtype)
     
     num_t = t.shape[0]
     num_knots = knots.shape[0]
@@ -124,7 +127,7 @@ def bspline_basis_second_derivatives(t, knots, degree, device=None):
     basis_lower = bspline_basis_functions(t, knots, degree - 2, device)
     
     # Initialize second derivative basis functions
-    second_deriv_basis = torch.zeros(num_t, num_basis, device=device)
+    second_deriv_basis = torch.zeros(num_t, num_basis, device=device, dtype=dtype)
     
     for i in range(num_basis):
         # Compute coefficients for the second derivative formula
@@ -284,12 +287,12 @@ def create_knot_vector(num_control_points, degree, closed=True):
     if closed:
         # For closed curves, use periodic knot vector
         num_knots = num_control_points + degree + 1
-        knots = torch.arange(num_knots, dtype=torch.float32)
+        knots = torch.arange(num_knots, dtype=torch.get_default_dtype())
         knots = knots / (num_knots - 1)  # Normalize to [0, 1] range
     else:
         # For open curves, clamp knots at endpoints
         num_knots = num_control_points + degree + 1
-        knots = torch.zeros(num_knots, dtype=torch.float32)
+        knots = torch.zeros(num_knots, dtype=torch.get_default_dtype())
         
         # Interior knots
         if num_knots > 2 * (degree + 1):
@@ -430,7 +433,7 @@ def point_in_polygon_winding_number_batched(points, polygon_vertices, batch_size
 
     return inside
 
-def distance_points_to_curve_samples_batched(query_points, curve_points, batch_size=200000, use_refinment=False):
+def distance_points_to_curve_samples_batched(query_points, curve_points, batch_size=200000, return_indices=False):
     """
     Compute minimal euclidean distance from each query point to a set of curve samples, in batches.
 
@@ -438,16 +441,17 @@ def distance_points_to_curve_samples_batched(query_points, curve_points, batch_s
         query_points: (N,2) tensor
         curve_points: (S,2) tensor
         batch_size: number of query points per batch
-        use_refinment: if True, refine distances with Newton iterations (not implemented)
+        return_indices: if True, also return indices of closest curve points
     Returns:
         min_distances: (N,) tensor of minimal distances
+        min_indices: (N,) tensor of indices (only if return_indices=True)
     """
     device = query_points.device
     dtype = query_points.dtype
 
     N = query_points.shape[0]
     min_d = torch.empty(N, device=device, dtype=dtype)
-    if use_refinment: min_idxs = torch.empty(N, device=device, dtype=torch.long)
+    min_idxs = torch.empty(N, device=device, dtype=torch.long) if return_indices else None
     # Ensure same dtype
     curve_points = curve_points.to(device=device, dtype=dtype)
 
@@ -456,23 +460,130 @@ def distance_points_to_curve_samples_batched(query_points, curve_points, batch_s
         qb = query_points[i:j].to(device=device, dtype=dtype)
         # torch.cdist is often well-optimized on GPU and CPU
         dists = torch.cdist(qb, curve_points)  # (B, S)
-        if use_refinment:
+        if return_indices:
             min_dists, min_indices = torch.min(dists, dim=1)
             min_d[i:j] = min_dists
             min_idxs[i:j] = min_indices
         else:
             min_d[i:j], _ = torch.min(dists, dim=1)
-    if use_refinment:
-        return min_d, min_idxs
 
-    return min_d, None
+    return min_d, min_idxs
 
-def bspline_signed_distance_vectorized(query_points, control_points, degree=3,
+def newton_closest_point_bspline_vectorized(query_points, control_points, knots, degree, 
+                                            t_init, device=None, max_iter=3, tol=1e-10):
+    """
+    Use Newton's method to find the closest point on a B-spline curve for multiple query points.
+    Fully vectorized for maximum performance with safeguards against divergence.
+    
+    The method finds t* such that (C(t) - p) · C'(t) = 0, which is the optimality condition
+    for the closest point on the curve.
+    
+    Newton update: t_{n+1} = t_n - f(t_n) / f'(t_n)
+    where f(t) = (C(t) - p) · C'(t)
+    and f'(t) = C'(t) · C'(t) + (C(t) - p) · C''(t)
+    
+    Args:
+        query_points: (N, 2) tensor - query points
+        control_points: (num_cp, 2) tensor - B-spline control points
+        knots: tensor - knot vector
+        degree: int - degree of B-spline
+        t_init: (N,) tensor - initial parameter values (from coarse search)
+        device: torch device
+        max_iter: int - maximum Newton iterations (default 3, usually sufficient)
+        tol: float - convergence tolerance
+    
+    Returns:
+        t_refined: (N,) tensor - refined parameter values
+        min_distances: (N,) tensor - distances at refined parameters
+    """
+    if device is None:
+        device = query_points.device
+    
+    dtype = query_points.dtype
+    N = query_points.shape[0]
+    
+    # Ensure all tensors are on the correct device and dtype
+    query_points = query_points.to(device=device, dtype=dtype)
+    control_points = control_points.to(device=device, dtype=dtype)
+    knots = knots.to(device=device, dtype=dtype)
+    t = t_init.clone().to(device=device, dtype=dtype)
+    
+    # Get valid parameter range
+    t_min = knots[degree]
+    t_max = knots[-degree-1]
+    param_range = t_max - t_min
+    
+    # Track best results
+    best_t = t.clone()
+    best_dist_sq = torch.full((N,), float('inf'), device=device, dtype=dtype)
+    
+    # Newton iteration - optimized loop
+    for iteration in range(max_iter):
+        # Compute all basis functions and derivatives in one pass
+        basis = bspline_basis_functions(t, knots, degree, device)
+        basis_deriv = bspline_basis_derivatives(t, knots, degree, device)
+        basis_second_deriv = bspline_basis_second_derivatives(t, knots, degree, device)
+        
+        # Evaluate curve and derivatives
+        curve_pts = torch.matmul(basis, control_points)
+        curve_deriv = torch.matmul(basis_deriv, control_points)
+        curve_second_deriv = torch.matmul(basis_second_deriv, control_points)
+        
+        # Difference vector and current distance
+        diff = curve_pts - query_points
+        current_dist_sq = torch.sum(diff * diff, dim=1)
+        
+        # Update best if improved
+        improved = current_dist_sq < best_dist_sq
+        best_t = torch.where(improved, t, best_t)
+        best_dist_sq = torch.where(improved, current_dist_sq, best_dist_sq)
+        
+        # Compute f(t) = (C(t) - p) · C'(t)
+        f = torch.sum(diff * curve_deriv, dim=1)
+        
+        # Compute f'(t) = |C'(t)|² + (C(t) - p) · C''(t)
+        f_prime = torch.sum(curve_deriv * curve_deriv, dim=1) + torch.sum(diff * curve_second_deriv, dim=1)
+        
+        # Safe division
+        f_prime_safe = torch.where(torch.abs(f_prime) < 1e-12, 
+                                   torch.ones_like(f_prime) * 1e-12, f_prime)
+        
+        # Newton step with adaptive damping (smaller as we converge)
+        dt = f / f_prime_safe
+        max_step = param_range * (0.1 / (iteration + 1))  # Decreasing step size
+        dt = torch.clamp(dt, -max_step, max_step)
+        
+        # Update t
+        t = torch.clamp(t - dt, t_min, t_max)
+        
+        # Early exit if converged
+        if torch.all(torch.abs(dt) < tol):
+            break
+    
+    # Final evaluation at best t
+    basis_final = bspline_basis_functions(best_t, knots, degree, device)
+    curve_pts_final = torch.matmul(basis_final, control_points)
+    final_dist_sq = torch.sum((curve_pts_final - query_points)**2, dim=1)
+    
+    # Also check final t position
+    basis_t = bspline_basis_functions(t, knots, degree, device)
+    curve_pts_t = torch.matmul(basis_t, control_points)
+    t_dist_sq = torch.sum((curve_pts_t - query_points)**2, dim=1)
+    
+    # Return the better of best_t or final t
+    use_final_t = t_dist_sq < final_dist_sq
+    result_t = torch.where(use_final_t, t, best_t)
+    result_dist = torch.sqrt(torch.where(use_final_t, t_dist_sq, final_dist_sq))
+    
+    return result_t, result_dist
+
+def bspline_signed_distance_vectorized(query_points, control_points, degree=3,*,
                                      num_curve_samples=1000, num_polygon_samples=500,
                                      device=None, point_batch_size=200000,
                                      precomputed_curve_points=None,
                                      precomputed_polygon_vertices=None,
-                                     precomputed_knots=None, use_refinment=False):
+                                     precomputed_knots=None, 
+                                     use_refinement=None, refinement_threshold=0.1):
     """
     Compute signed distance from query points to a closed B-spline contour.
     Positive distances indicate points inside the contour, negative for outside.
@@ -481,9 +592,23 @@ def bspline_signed_distance_vectorized(query_points, control_points, degree=3,
         query_points: tensor of shape (num_points, 2) or (2,) - points to evaluate
         control_points: tensor of shape (num_cp, 2) - B-spline control points defining closed contour
         degree: int - degree of B-spline (default 3 for cubic)
-        num_curve_samples: int - samples for distance computation
-        num_polygon_samples: int - samples for inside/outside determination
+        num_curve_samples: int - samples for distance computation (default 1000)
+        num_polygon_samples: int - samples for inside/outside determination (default 500)
         device: torch device
+        point_batch_size: int - batch size for distance computation (default 200000)
+        precomputed_curve_points: optional precomputed curve samples
+        precomputed_polygon_vertices: optional precomputed polygon vertices
+        precomputed_knots: optional precomputed knot vector
+        use_refinement: bool or None (default=None for SMART mode)
+            - False: no Newton refinement (fastest, lower accuracy near boundary)
+            - True: Newton refinement for ALL points (slower, highest accuracy everywhere)
+            - None: SMART mode (default) - Newton refinement only for points with 
+                   |distance| < refinement_threshold. Best accuracy-to-speed tradeoff,
+                   recommended for most applications especially IGA where boundary 
+                   accuracy is critical.
+        refinement_threshold: float - distance threshold for smart refinement mode (default 0.1)
+                             Points closer to boundary than this threshold get Newton refined.
+                             Only used when use_refinement=None.
     
     Returns:
         tensor of shape (num_points,) or scalar - signed distances
@@ -498,9 +623,8 @@ def bspline_signed_distance_vectorized(query_points, control_points, degree=3,
     if device is None:
         device = query_points.device
 
-    # Use float32 for speed/memory unless higher precision is explicitly provided
-    dtype = torch.float32 if query_points.dtype == torch.float32 else query_points.dtype
-
+    # Use input dtype or default dtype (expected to be float64)
+    dtype = query_points.dtype
     query_points = query_points.to(device=device, dtype=dtype)
     control_points = control_points.to(device=device, dtype=dtype)
 
@@ -525,30 +649,53 @@ def bspline_signed_distance_vectorized(query_points, control_points, degree=3,
         polygon_vertices = evaluate_bspline_curve_vectorized(t_polygon, control_points, knots, degree, device)
 
     # Compute minimum distances to the curve samples in batches
-    min_distances, min_indices = distance_points_to_curve_samples_batched(query_points, curve_points, batch_size=point_batch_size, use_refinment=use_refinment)
-
-    if use_refinment:
+    if use_refinement:
+        # Get initial estimates from coarse sampling
+        t_values = torch.linspace(knots[degree], knots[-degree-1], num_curve_samples, device=device, dtype=dtype)
+        min_distances, min_indices = distance_points_to_curve_samples_batched(
+            query_points, curve_points, batch_size=point_batch_size, return_indices=True
+        )
         
-        ref_req_treshold = 1e-2  # Threshold to decide if refinement is needed
-        refinment_num_curve_samples = 100  # Samples for refinement
-        to_refine_mask = min_distances > ref_req_treshold
-        if torch.any(to_refine_mask):
-            refine_query_points = query_points[to_refine_mask]
-            refine_min_indices = min_indices[to_refine_mask]
-            # exclude first and last index to avoid boundary issues
-            refine_min_indices = torch.clamp(refine_min_indices, 1, curve_points.shape[0]-2)
+        # Convert indices to initial t values
+        t_init = t_values[min_indices]
+        
+        # Refine with Newton iteration (fully vectorized, 3 iterations is usually sufficient)
+        _, min_distances = newton_closest_point_bspline_vectorized(
+            query_points, control_points, knots, degree, t_init,
+            device=device, max_iter=3, tol=1e-12
+        )
+    elif use_refinement is None:
+        # Smart mode: selective refinement only for points near the boundary
+        # This provides best accuracy-to-speed tradeoff
+        
+        # Get initial estimates from coarse sampling (always need indices for Newton)
+        t_values = torch.linspace(knots[degree], knots[-degree-1], num_curve_samples, device=device, dtype=dtype)
+        min_distances, min_indices = distance_points_to_curve_samples_batched(
+            query_points, curve_points, batch_size=point_batch_size, return_indices=True
+        )
+        
+        # Identify points near the boundary that need refinement
+        needs_refinement = min_distances < refinement_threshold
+        
+        if needs_refinement.any():
+            # Refine only the subset of points near the boundary
+            refine_indices = torch.nonzero(needs_refinement, as_tuple=True)[0]
+            refine_query_pts = query_points[refine_indices]
+            refine_t_init = t_values[min_indices[refine_indices]]
             
-            # Create refined t_values for each point individually
-            refined_distances_list = []
-            for idx in refine_min_indices:
-                t_start = t_values[idx - 1].item()
-                t_end = t_values[idx + 1].item()
-                t_refined = torch.linspace(t_start, t_end, refinment_num_curve_samples, device=device, dtype=dtype)
-                curve_refined = evaluate_bspline_curve_vectorized(t_refined, control_points, knots, degree, device)
-                refined_distances_list.append(torch.min(torch.cdist(refine_query_points[len(refined_distances_list)].unsqueeze(0), curve_refined)))
+            # Apply Newton iteration to selected points
+            _, refined_distances = newton_closest_point_bspline_vectorized(
+                refine_query_pts, control_points, knots, degree, refine_t_init,
+                device=device, max_iter=3, tol=1e-12
+            )
             
-            refined_min_distances = torch.stack(refined_distances_list)
-            min_distances[to_refine_mask] = refined_min_distances
+            # Update only the refined distances
+            min_distances[refine_indices] = refined_distances
+    else:
+        min_distances, _ = distance_points_to_curve_samples_batched(
+            query_points, curve_points, batch_size=point_batch_size, return_indices=False
+        )
+    
     # Batched winding number inside/outside test
     inside_mask = point_in_polygon_winding_number_batched(query_points, polygon_vertices, batch_size=point_batch_size)
 
@@ -560,7 +707,6 @@ def bspline_signed_distance_vectorized(query_points, control_points, degree=3,
         return signed_distances[0]
     
     return signed_distances
-
 
 def find_closest_point_on_bspline_curve(query_point, control_points, degree=3,
                                        num_curve_samples=1000, device=None):

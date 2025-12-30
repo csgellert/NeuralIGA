@@ -179,7 +179,7 @@ def plot_bspline_curve(control_points, degree=3, num_samples=400, closed=True, d
     plt.grid(True)
     plt.show()
 def plot_bspline_distance_field(control_points, degree=3, N=400, extent=(-2, 2, -2, 2), 
-                               contour=False, levels=20, device=None, chunk_size=200000):
+                               contour=False, levels=20, device=None, chunk_size=200000, use_refinement=False):
     """
     Plot the signed distance field for a B-spline contour.
     
@@ -216,7 +216,7 @@ def plot_bspline_distance_field(control_points, degree=3, N=400, extent=(-2, 2, 
         for i in range(0, pts.shape[0], chunk_size):
             j = min(i + chunk_size, pts.shape[0])
             distances[i:j] = bsp_geom.bspline_signed_distance_vectorized(
-                pts[i:j], control_points, degree=degree, device=device
+                pts[i:j], control_points, degree=degree, device=device, use_refinement=use_refinement
             )
     
     Z = distances.cpu().numpy().reshape(N, N)

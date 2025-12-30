@@ -304,7 +304,7 @@ def plotDisctancefunction(eval_fun, N=500, extent=(-1.1, 1.1, -1.1, 1.1), contou
         for idxy,yy in enumerate(y_values):
             #print(yy)
             try:
-                crd = torch.tensor([xx, yy], dtype=torch.float32)
+                crd = torch.tensor([xx, yy], dtype=torch.float64)
                 ans = eval_fun(crd)
                 Z[idxx, idxy] = ans[0].item()
             except:

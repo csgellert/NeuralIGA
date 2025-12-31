@@ -11,24 +11,25 @@ import geometry_definitions as geom_defs
 import network_defs as net_defs
 import SDF
 from matplotlib.animation import FuncAnimation
-def generate_data(num_samples,fun_num = 0, device=None):
+def generate_data(num_samples, fun_num=0, device=None, data_gen_params={}):
     """
     Generate training data for various functions.
     
     Args:
         num_samples: number of data points to generate
-        fun_num: function type (0=circle, 1=star, 2=circle_euklidean, 4=L-shape)
+        fun_num: function type (0=circle, 1=star, 4=L-shape, 5=line)
         device: torch device for computation (CPU/CUDA)
+        data_gen_params: dict with additional parameters (e.g., 'angle', 'offset' for line)
     """
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
     if fun_num == 0: # circle
         # Generate random (x, y) coordinates between -1 and 1
-        margain = 0.1
-        x = torch.rand(num_samples, 2, device=device) * (2+margain) - 1-margain  # Range [-1, 1]
+        margain = 0
+        x = torch.rand(num_samples, 2, device=device) * (2+2*margain) - 1-margain  # Range [-1, 1]
         # Compute the target function: 1 - x^2 - y^2
-        y =  1 - x[:, 0] ** 2 - x[:, 1] ** 2
+        y =  1 - torch.sqrt(torch.pow(x[:, 0], 2) + torch.pow(x[:, 1], 2))
         return x, y.view(-1, 1)
     elif fun_num==1: #star shape
         coordinates = 2 * torch.rand(num_samples, 2, device=device) - 1  # Tensor of shape (500, 2) with values in range [-1, 1]
@@ -37,12 +38,125 @@ def generate_data(num_samples,fun_num = 0, device=None):
         distances = SDF.distance_from_star_contour_vectorized(coordinates, device=device)
         
         return coordinates, distances.view(-1, 1)
-    if fun_num == 4: # L-shape
+    elif fun_num == 4: # L-shape
         coordinates = 2 * torch.rand(num_samples, 2, device=device) - 1
         distances = SDF.distance_from_L_shape_vectorized(coordinates, device=device)
         return coordinates, distances.view(-1, 1)
+    elif fun_num == 5: # infinite line
+        angle = data_gen_params.get('angle', 0.0)  # angle in radians
+        offset = data_gen_params.get('offset', 0.0)  # perpendicular offset from origin
+        margain = 0.1
+        coordinates = torch.rand(num_samples, 2, device=device) * (2+margain*2) - 1 - margain
+        distances = SDF.distance_from_line_vectorized(coordinates, angle=angle, offset=offset, device=device)
+        return coordinates, distances.view(-1, 1)
     else:
         raise NotImplementedError
+
+
+def generate_standard_boundary_points(num_boundary_points, fun_num=0, device=None, data_gen_params={}, 
+                                       use_importance_sampling=False, importance_sampling_params={}):
+    """
+    Generate boundary points for standard (non-bspline) geometries.
+    
+    Args:
+        num_boundary_points: int - number of boundary points to generate
+        fun_num: function type (0=circle, 1=star, 4=L-shape, 5=line)
+        device: torch device for computation
+        data_gen_params: dict with additional parameters
+        use_importance_sampling: if True, add Gaussian noise to boundary points and return SDF values
+        importance_sampling_params: dict with 'sigma' for noise level (default 0.01)
+    
+    Returns:
+        boundary_points: tensor of shape (num_boundary_points, 2)
+        sdf_values: tensor of shape (num_boundary_points, 1) if use_importance_sampling, else None
+    """
+    sigma = importance_sampling_params.get('sigma', 0.01)
+    
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    if fun_num == 0:  # circle with radius 1
+        # Generate points on unit circle
+        theta = torch.rand(num_boundary_points, device=device) * 2 * math.pi
+        boundary_points = torch.stack([torch.cos(theta), torch.sin(theta)], dim=1)
+        
+        if use_importance_sampling:
+            noise = torch.randn_like(boundary_points, device=device) * sigma
+            boundary_points += noise
+            boundary_points = torch.clamp(boundary_points, -1.1, 1.1)
+            # SDF for circle: 1 - x^2 - y^2
+            sdf_val = 1 - boundary_points[:, 0]**2 - boundary_points[:, 1]**2
+            return boundary_points, sdf_val.view(-1, 1)
+        return boundary_points
+    
+    elif fun_num == 1:  # star shape
+        R = data_gen_params.get('outer_radius', 1.0)
+        r = data_gen_params.get('inner_radius', 0.5)
+        n = data_gen_params.get('num_star_points', 5)
+        
+        # Generate points on star contour
+        star_vertices = SDF.calculate_star_vertices_vectorized(R, r, n, device)
+        num_vertices = star_vertices.shape[0]
+        
+        # Randomly select edges and positions on those edges
+        edge_indices = torch.randint(0, num_vertices, (num_boundary_points,), device=device)
+        t = torch.rand(num_boundary_points, device=device)
+        
+        start_points = star_vertices[edge_indices]
+        end_points = star_vertices[(edge_indices + 1) % num_vertices]
+        
+        # Interpolate along edges
+        boundary_points = start_points + t.unsqueeze(1) * (end_points - start_points)
+        
+        if use_importance_sampling:
+            noise = torch.randn_like(boundary_points, device=device) * sigma
+            boundary_points += noise
+            boundary_points = torch.clamp(boundary_points, -1.1, 1.1)
+            sdf_val = SDF.distance_from_star_contour_vectorized(boundary_points, R=R, r=r, n=n, device=device)
+            return boundary_points, sdf_val.view(-1, 1)
+        return boundary_points
+    
+    elif fun_num == 4:  # L-shape
+        # L-shape corners
+        corners = torch.tensor([(0.0, 1.0), (0.0, 0.0), (1.0, 0.0), (1.0, 0.5), (0.5, 0.5), (0.5, 1.0)], device=device)
+        num_corners = corners.shape[0]
+        
+        # Randomly select edges and positions
+        edge_indices = torch.randint(0, num_corners, (num_boundary_points,), device=device)
+        t = torch.rand(num_boundary_points, device=device)
+        
+        start_points = corners[edge_indices]
+        end_points = corners[(edge_indices + 1) % num_corners]
+        
+        boundary_points = start_points + t.unsqueeze(1) * (end_points - start_points)
+        
+        if use_importance_sampling:
+            noise = torch.randn_like(boundary_points, device=device) * sigma
+            boundary_points += noise
+            boundary_points = torch.clamp(boundary_points, -0.1, 1.1)
+            sdf_val = SDF.distance_from_L_shape_vectorized(boundary_points, device=device)
+            return boundary_points, sdf_val.view(-1, 1)
+        return boundary_points
+    
+    elif fun_num == 5:  # infinite line
+        angle = data_gen_params.get('angle', 0.0)
+        offset = data_gen_params.get('offset', 0.0)
+        range_min = data_gen_params.get('range_min', -1.5)
+        range_max = data_gen_params.get('range_max', 1.5)
+        
+        boundary_points = SDF.generate_points_on_line(num_boundary_points, angle=angle, offset=offset, 
+                                                       range_min=range_min, range_max=range_max, device=device)
+        
+        if use_importance_sampling:
+            noise = torch.randn_like(boundary_points, device=device) * sigma
+            boundary_points += noise
+            boundary_points = torch.clamp(boundary_points, -1.1, 1.1)
+            sdf_val = SDF.distance_from_line_vectorized(boundary_points, angle=angle, offset=offset, device=device)
+            return boundary_points, sdf_val.view(-1, 1)
+        return boundary_points
+    
+    else:
+        raise NotImplementedError(f"Boundary point generation not implemented for fun_num={fun_num}")
    
 
 def generate_bspline_data(num_samples, case=1, device=None, data_gen_params={}, gt_num_curve_samples=1000, use_refinement = False):
@@ -252,7 +366,7 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
         # Generate training data
         #pts, target = generate_bspline_data(batch_size, case=fun_num, device=device)
         if data_gen_mode == 'standard':
-            pts, target = generate_data(batch_size, fun_num=fun_num, device=device) 
+            pts, target = generate_data(batch_size, fun_num=fun_num, device=device, data_gen_params=data_gen_params) 
         elif data_gen_mode == 'bspline':
             pts, target = generate_bspline_data(batch_size, case=fun_num, device=device, data_gen_params=data_gen_params, gt_num_curve_samples=gt_num_curve_samples, use_refinement=use_refinement)
         else:
@@ -271,8 +385,11 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                 eikonal_term = ((grads.norm(dim=1) - 1) ** 2).mean()
                 loss += eikon_coeff * eikonal_term
             if boundry_coeff > 0.0:
-                #generating boundary points
-                bndr_pts = generate_bspline_boundary_points(num_boundary_points=batch_size, case=fun_num, device=device, data_gen_params=data_gen_params)
+                # Generating boundary points based on data generation mode
+                if data_gen_mode == 'bspline':
+                    bndr_pts = generate_bspline_boundary_points(num_boundary_points=batch_size, case=fun_num, device=device, data_gen_params=data_gen_params)
+                else:
+                    bndr_pts = generate_standard_boundary_points(num_boundary_points=batch_size, fun_num=fun_num, device=device, data_gen_params=data_gen_params)
                 bndr_pred = model(bndr_pts)
                 boundary_term = (bndr_pred ** 2).mean()
                 loss += boundry_coeff * boundary_term
@@ -282,7 +399,11 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
             if boundary_norm_coeff > 0.0:
                 raise NotImplementedError("Boundary norm term not implemented in this snippet.")
             if use_importance_sampling and importance_sampling_coeff > 0.0:
-                bndr_pts, targets = generate_bspline_boundary_points(num_boundary_points=batch_size, case=fun_num, device=device, data_gen_params=data_gen_params, use_importance_sampling=True, importance_sampling_params=importance_sampling_params, gt_num_curve_samples=gt_num_curve_samples, use_refinement=use_refinement)
+                # Importance sampling based on data generation mode
+                if data_gen_mode == 'bspline':
+                    bndr_pts, targets = generate_bspline_boundary_points(num_boundary_points=batch_size, case=fun_num, device=device, data_gen_params=data_gen_params, use_importance_sampling=True, importance_sampling_params=importance_sampling_params, gt_num_curve_samples=gt_num_curve_samples, use_refinement=use_refinement)
+                else:
+                    bndr_pts, targets = generate_standard_boundary_points(num_boundary_points=batch_size, fun_num=fun_num, device=device, data_gen_params=data_gen_params, use_importance_sampling=True, importance_sampling_params=importance_sampling_params)
                 bndr_pred = model(bndr_pts)
                 loss += importance_sampling_coeff * criterion(bndr_pred, targets)
 

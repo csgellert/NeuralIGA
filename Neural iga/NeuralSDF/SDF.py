@@ -4,6 +4,87 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+def distance_from_line_vectorized(coords, angle=0.0, offset=0.0, device=None):
+    """
+    Compute signed distance from points to an infinite line passing through origin.
+    
+    The line is defined by its angle from the positive x-axis.
+    Points on the positive side (counter-clockwise from the line) have positive distance.
+    
+    Args:
+        coords: tensor of shape (num_points, 2) or (2,) - [x, y] coordinates
+        angle: float - angle of the line in radians (0 = horizontal, pi/2 = vertical)
+        offset: float - perpendicular offset of the line from origin
+        device: torch device for computation
+    
+    Returns:
+        tensor of shape (num_points,) or scalar - signed distances
+    """
+    # Handle single point input
+    if coords.dim() == 1:
+        coords = coords.unsqueeze(0)
+        single_point = True
+    else:
+        single_point = False
+    
+    if device is None:
+        device = coords.device
+    
+    coords = coords.to(device)
+    
+    # Normal vector to the line (perpendicular, pointing to positive side)
+    # Line direction is (cos(angle), sin(angle))
+    # Normal is (-sin(angle), cos(angle))
+    normal_x = -math.sin(angle)
+    normal_y = math.cos(angle)
+    
+    # Signed distance = dot product with normal - offset
+    # d = x * (-sin(angle)) + y * cos(angle) - offset
+    signed_distances = coords[:, 0] * normal_x + coords[:, 1] * normal_y - offset
+    
+    if single_point:
+        return signed_distances[0]
+    
+    return signed_distances
+
+
+def generate_points_on_line(num_points, angle=0.0, offset=0.0, range_min=-1.0, range_max=1.0, device=None):
+    """
+    Generate random points on an infinite line within a specified range.
+    
+    Args:
+        num_points: int - number of points to generate
+        angle: float - angle of the line in radians
+        offset: float - perpendicular offset of the line from origin
+        range_min: float - minimum parameter value along the line
+        range_max: float - maximum parameter value along the line
+        device: torch device
+    
+    Returns:
+        tensor of shape (num_points, 2) - points on the line
+    """
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Random parameter values along the line
+    t = torch.rand(num_points, device=device) * (range_max - range_min) + range_min
+    
+    # Line direction
+    dir_x = math.cos(angle)
+    dir_y = math.sin(angle)
+    
+    # Point on line closest to origin (at perpendicular distance = offset)
+    base_x = -offset * math.sin(angle)
+    base_y = offset * math.cos(angle)
+    
+    # Generate points
+    points = torch.zeros(num_points, 2, device=device)
+    points[:, 0] = base_x + t * dir_x
+    points[:, 1] = base_y + t * dir_y
+    
+    return points
+
+
 def l_shape_distance(crd):
     """
     Calculates the distance of a point (x, y) from an L-shaped domain.
@@ -323,3 +404,130 @@ def plotDisctancefunction(eval_fun, N=500, extent=(-1.1, 1.1, -1.1, 1.1), contou
     plt.title('Scalar-Valued Function f(x, y)')
     plt.grid(True)
     plt.show()
+
+
+def visualize_standard_testcase(fun_num=0, N=200, extent=(-1.1, 1.1, -1.1, 1.1), 
+                                 contour=False, plot_zero_level=True, data_gen_params={},
+                                 device=None, ax=None, title=None, cmap='viridis'):
+    """
+    Visualize standard test cases from NeuralImplicit.
+    
+    Args:
+        fun_num: int - test case number
+            0: circle (SDF = 1 - sqrt(x^2 + y^2))
+            1: star shape (5-pointed star with R=1, r=0.5)
+            4: L-shape
+            5: infinite line (requires 'angle' and 'offset' in data_gen_params)
+        N: int - grid resolution
+        extent: tuple - (xmin, xmax, ymin, ymax) for the plot
+        contour: bool - if True, use contour lines; if False, use filled contours
+        plot_zero_level: bool - if True, highlight the zero level set (boundary)
+        data_gen_params: dict - additional parameters for test cases (e.g., angle/offset for line)
+        device: torch device
+        ax: matplotlib axis - if provided, plot on this axis; otherwise create new figure
+        title: str - custom title; if None, auto-generate based on fun_num
+        cmap: str - colormap name
+    
+    Returns:
+        fig, ax if ax was None; otherwise just ax
+    """
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Generate grid
+    x_values = torch.linspace(extent[0], extent[1], N, device=device)
+    y_values = torch.linspace(extent[2], extent[3], N, device=device)
+    X, Y = torch.meshgrid(x_values, y_values, indexing='ij')
+    coords = torch.stack([X.ravel(), Y.ravel()], dim=1)
+    
+    # Compute SDF based on fun_num
+    if fun_num == 0:  # circle
+        Z = 1 - torch.sqrt(coords[:, 0]**2 + coords[:, 1]**2)
+        default_title = 'Circle SDF: $1 - \\sqrt{x^2 + y^2}$'
+    elif fun_num == 1:  # star shape
+        R = data_gen_params.get('outer_radius', 1.0)
+        r = data_gen_params.get('inner_radius', 0.5)
+        n = data_gen_params.get('num_star_points', 5)
+        Z = distance_from_star_contour_vectorized(coords, R=R, r=r, n=n, device=device)
+        default_title = f'Star SDF (R={R}, r={r}, n={n})'
+    elif fun_num == 4:  # L-shape
+        Z = distance_from_L_shape_vectorized(coords, device=device)
+        default_title = 'L-shape SDF'
+    elif fun_num == 5:  # infinite line
+        angle = data_gen_params.get('angle', 0.0)
+        offset = data_gen_params.get('offset', 0.0)
+        Z = distance_from_line_vectorized(coords, angle=angle, offset=offset, device=device)
+        angle_deg = math.degrees(angle)
+        default_title = f'Line SDF (angle={angle_deg:.1f}°, offset={offset:.2f})'
+    else:
+        raise NotImplementedError(f"Visualization not implemented for fun_num={fun_num}")
+    
+    # Reshape to grid
+    Z = Z.reshape(N, N).cpu().numpy()
+    X_np = X.cpu().numpy()
+    Y_np = Y.cpu().numpy()
+    
+    # Create figure if no axis provided
+    created_fig = False
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 7))
+        created_fig = True
+    
+    # Plot
+    if contour:
+        cf = ax.contour(X_np, Y_np, Z, levels=20, cmap=cmap)
+    else:
+        cf = ax.contourf(X_np, Y_np, Z, levels=50, cmap=cmap)
+    
+    # Add colorbar
+    if created_fig:
+        plt.colorbar(cf, ax=ax, label='SDF value')
+    
+    # Plot zero level set (boundary)
+    if plot_zero_level:
+        ax.contour(X_np, Y_np, Z, levels=[0], colors='red', linewidths=2, linestyles='solid')
+    
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_title(title if title else default_title)
+    ax.set_aspect('equal')
+    ax.grid(True, alpha=0.3)
+    
+    if created_fig:
+        plt.tight_layout()
+        plt.show()
+        return fig, ax
+    return ax
+
+
+def visualize_all_standard_testcases(N=150, data_gen_params_list=None, device=None):
+    """
+    Visualize all standard test cases in a single figure.
+    
+    Args:
+        N: int - grid resolution
+        data_gen_params_list: list of dicts - parameters for each test case (indexed by fun_num)
+        device: torch device
+    """
+    if data_gen_params_list is None:
+        data_gen_params_list = {
+            0: {},  # circle
+            1: {},  # star
+            4: {},  # L-shape
+            5: {'angle': math.pi/4, 'offset': 0.0},  # 45° line
+        }
+    
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    axes = axes.ravel()
+    
+    test_cases = [0, 1, 4, 5]
+    titles = ['Circle', 'Star', 'L-shape', 'Line (45°)']
+    
+    for i, (fun_num, title) in enumerate(zip(test_cases, titles)):
+        params = data_gen_params_list.get(fun_num, {})
+        visualize_standard_testcase(fun_num=fun_num, N=N, ax=axes[i], 
+                                    title=title, data_gen_params=params, device=device)
+    
+    plt.tight_layout()
+    plt.show()
+    return fig, axes

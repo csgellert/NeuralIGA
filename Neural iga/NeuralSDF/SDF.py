@@ -88,6 +88,7 @@ def generate_points_on_line(num_points, angle=0.0, offset=0.0, range_min=-1.0, r
 def l_shape_distance(crd):
     """
     Calculates the distance of a point (x, y) from an L-shaped domain.
+    L-shape fills domain [-1, 1] with lower corner at (-1, -1).
 
     Args:
         x: The x-coordinate of the point.
@@ -99,13 +100,13 @@ def l_shape_distance(crd):
 
     x = crd[0]
     y = crd[1]
-    corners = [(0.0, 1.0), (0.0, 0.0), (1.0, 0.0),(1.0,0.5),(0.5,0.5),(0.5,1.0)]
+    corners = [(-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (1.0, 0.0), (0.0, 0.0), (0.0, 1.0)]
     dists = [distance_point_to_line(x,y,corners[i][0], corners[i][1], corners[i+1][0],corners[i+1][1]) for i in range(len(corners)-1)]
     dists.append(distance_point_to_line(x,y,corners[-1][0], corners[-1][1], corners[0][0],corners[0][1]))
     dist = min(dists)
 
-    sgn1 = 1 if x>=0 and x<1 and y>=0 and y<0.5 else -1
-    sgn2 = 1 if x>=0 and x<0.5 and y>=0.5 and y<=1 else -1
+    sgn1 = 1 if x>=-1 and x<1 and y>=-1 and y<0 else -1
+    sgn2 = 1 if x>=-1 and x<0 and y>=0 and y<=1 else -1
     sgn = max(sgn1,sgn2)
 
 
@@ -283,6 +284,7 @@ def distance_from_star_contour_vectorized(coords, R=1, r=0.5, n=5, device=None):
 def distance_from_L_shape_vectorized(coords, device=None):
     """
     Vectorized calculation of distances from multiple points to an L-shaped domain.
+    L-shape fills domain [-1, 1] with lower corner at (-1, -1).
     
     Args:
         coords: tensor of shape (num_points, 2) - [x, y] coordinates
@@ -292,8 +294,8 @@ def distance_from_L_shape_vectorized(coords, device=None):
     """
     num_points = coords.shape[0]
     
-    # Define L-shape corners
-    corners = torch.tensor([(0.0, 1.0), (0.0, 0.0), (1.0, 0.0), (1.0, 0.5), (0.5, 0.5), (0.5, 1.0)], device=coords.device)
+    # Define L-shape corners - scaled by 2 and translated to fill [-1, 1]
+    corners = torch.tensor([(-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (1.0, 0.0), (0.0, 0.0), (0.0, 1.0)], device=coords.device)
     
     # Create line segments from corners
     line_starts = corners
@@ -309,8 +311,8 @@ def distance_from_L_shape_vectorized(coords, device=None):
     x = coords[:, 0]
     y = coords[:, 1]
     
-    sgn1 = torch.where((x >= 0) & (x < 1) & (y >= 0) & (y < 0.5), torch.tensor(1.0, device=coords.device), torch.tensor(-1.0, device=coords.device))
-    sgn2 = torch.where((x >= 0) & (x < 0.5) & (y >= 0.5) & (y <= 1), torch.tensor(1.0, device=coords.device), torch.tensor(-1.0, device=coords.device))
+    sgn1 = torch.where((x >= -1) & (x < 1) & (y >= -1) & (y < 0), torch.tensor(1.0, device=coords.device), torch.tensor(-1.0, device=coords.device))
+    sgn2 = torch.where((x >= -1) & (x < 0) & (y >= 0) & (y <= 1), torch.tensor(1.0, device=coords.device), torch.tensor(-1.0, device=coords.device))
     sgn = torch.max(sgn1, sgn2)
     
     signed_distances = min_distances * sgn
@@ -531,3 +533,125 @@ def visualize_all_standard_testcases(N=150, data_gen_params_list=None, device=No
     plt.tight_layout()
     plt.show()
     return fig, axes
+
+
+def interpolate_sdf_from_grid(sdf_grid, points, domain_min=-1.0, domain_max=1.0):
+    """
+    Interpolates SDF values from an NxN grid at given (x, y) points using bilinear interpolation.
+    
+    Args:
+        sdf_grid: numpy array or torch tensor of shape (N, N) - the evaluated distance function on a grid
+                  sdf_grid[i, j] corresponds to the point at (x_j, y_i) where:
+                  x_j = domain_min + j * (domain_max - domain_min) / (N - 1)
+                  y_i = domain_min + i * (domain_max - domain_min) / (N - 1)
+        points: numpy array or torch tensor of shape (M, 2) - list of (x, y) points to interpolate
+        domain_min: float - minimum value of the domain (default: -1.0)
+        domain_max: float - maximum value of the domain (default: 1.0)
+    
+    Returns:
+        numpy array or torch tensor of shape (M,) - interpolated SDF values at the given points
+    """
+    # Determine if input is torch tensor or numpy array
+    is_torch = isinstance(sdf_grid, torch.Tensor)
+    
+    if is_torch:
+        device = sdf_grid.device
+        points = points.to(device) if isinstance(points, torch.Tensor) else torch.tensor(points, device=device, dtype=sdf_grid.dtype)
+    else:
+        sdf_grid = np.asarray(sdf_grid)
+        points = np.asarray(points)
+    
+    N = sdf_grid.shape[0]
+    M = points.shape[0]
+    
+    # Extract x, y coordinates
+    x = points[:, 0]
+    y = points[:, 1]
+    
+    # Map coordinates from [domain_min, domain_max] to [0, N-1]
+    grid_size = domain_max - domain_min
+    x_normalized = (x - domain_min) / grid_size * (N - 1)
+    y_normalized = (y - domain_min) / grid_size * (N - 1)
+    
+    if is_torch:
+        # Clamp to valid range
+        x_normalized = torch.clamp(x_normalized, 0, N - 1 - 1e-6)
+        y_normalized = torch.clamp(y_normalized, 0, N - 1 - 1e-6)
+        
+        # Get integer indices (floor)
+        x0 = x_normalized.long()
+        y0 = y_normalized.long()
+        x1 = torch.clamp(x0 + 1, 0, N - 1)
+        y1 = torch.clamp(y0 + 1, 0, N - 1)
+        
+        # Get fractional parts
+        xd = x_normalized - x0.float()
+        yd = y_normalized - y0.float()
+        
+        # Get values at the four corners
+        # sdf_grid[row, col] = sdf_grid[y_index, x_index]
+        f00 = sdf_grid[y0, x0]
+        f01 = sdf_grid[y0, x1]
+        f10 = sdf_grid[y1, x0]
+        f11 = sdf_grid[y1, x1]
+        
+        # Bilinear interpolation
+        interpolated = (f00 * (1 - xd) * (1 - yd) +
+                        f01 * xd * (1 - yd) +
+                        f10 * (1 - xd) * yd +
+                        f11 * xd * yd)
+    else:
+        # Clamp to valid range
+        x_normalized = np.clip(x_normalized, 0, N - 1 - 1e-6)
+        y_normalized = np.clip(y_normalized, 0, N - 1 - 1e-6)
+        
+        # Get integer indices (floor)
+        x0 = x_normalized.astype(int)
+        y0 = y_normalized.astype(int)
+        x1 = np.clip(x0 + 1, 0, N - 1)
+        y1 = np.clip(y0 + 1, 0, N - 1)
+        
+        # Get fractional parts
+        xd = x_normalized - x0
+        yd = y_normalized - y0
+        
+        # Get values at the four corners
+        f00 = sdf_grid[y0, x0]
+        f01 = sdf_grid[y0, x1]
+        f10 = sdf_grid[y1, x0]
+        f11 = sdf_grid[y1, x1]
+        
+        # Bilinear interpolation
+        interpolated = (f00 * (1 - xd) * (1 - yd) +
+                        f01 * xd * (1 - yd) +
+                        f10 * (1 - xd) * yd +
+                        f11 * xd * yd)
+    
+    return interpolated
+
+
+if __name__ == "__main__":
+    #create NxN grid
+    N = 440
+    x_values = np.linspace(-1, 1, N)
+    y_values = np.linspace(-1, 1, N)
+    X, Y = np.meshgrid(x_values, y_values)
+    coords = np.stack([X.ravel(), Y.ravel()], axis=1)
+    #evaluate SDF on grid
+    #sdf_grid = 1-np.sqrt(coords[:, 0]**2 + coords[:, 1]**2)
+    sdf_grid = distance_from_star_contour_vectorized(torch.tensor(coords, dtype=torch.float64), R=1, r=0.5, n=5).numpy()
+    sdf_grid = sdf_grid.reshape(N, N)
+    #interpolate at random points
+    num_points = 10000
+    random_points = np.random.uniform(-1, 1, size=(num_points, 2))
+    interpolated_sdf = interpolate_sdf_from_grid(sdf_grid, random_points)
+    #compare with exact SDF
+    #exact_sdf = 1-np.sqrt(random_points[:,0]**2 + random_points[:,1]**2)
+    exact_sdf = distance_from_star_contour_vectorized(torch.tensor(random_points, dtype=torch.float64), R=1, r=0.5, n=5).numpy()
+    error = np.abs(interpolated_sdf - exact_sdf)
+    print(f"Max interpolation error: {np.max(error)}")
+    print(f"Mean interpolation error: {np.mean(error)}")
+    import NeuralImplicit as NI
+    boundary_points = NI.generate_standard_boundary_points(10000, fun_num=1)
+    sdf_values = interpolate_sdf_from_grid(sdf_grid, boundary_points)
+    print(f"SDF values at boundary points (should be close to 0): mean={np.mean(np.abs(sdf_values))}, max={np.max(np.abs(sdf_values))}")

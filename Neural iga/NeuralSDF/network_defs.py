@@ -338,8 +338,8 @@ class PosEncoding(nn.Module):
             out.append(x)
 
         for freq in self.freq_bands:
-            out.append(torch.sin(freq * x))
-            out.append(torch.cos(freq * x))
+            out.append(torch.sin(freq *torch.pi * x))
+            out.append(torch.cos(freq *torch.pi * x))
 
         return torch.cat(out, dim=-1)
 

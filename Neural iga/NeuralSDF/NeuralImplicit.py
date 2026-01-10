@@ -26,13 +26,14 @@ def generate_data(num_samples, fun_num=0, device=None, data_gen_params={}):
         
     if fun_num == 0: # circle
         # Generate random (x, y) coordinates between -1 and 1
-        margain = 0
+        margain = data_gen_params.get('margain', 0.0)
         x = torch.rand(num_samples, 2, device=device) * (2+2*margain) - 1-margain  # Range [-1, 1]
         # Compute the target function: 1 - x^2 - y^2
         y =  1 - torch.sqrt(torch.pow(x[:, 0], 2) + torch.pow(x[:, 1], 2))
         return x, y.view(-1, 1)
     elif fun_num==1: #star shape
-        coordinates = 2 * torch.rand(num_samples, 2, device=device) - 1  # Tensor of shape (500, 2) with values in range [-1, 1]
+        margain = data_gen_params.get('margain', 0.0)
+        coordinates = (2+2*margain) * torch.rand(num_samples, 2, device=device) - 1 -margain # Tensor of shape (500, 2) with values in range [-1, 1]
 
         # Calculate distances for each point using vectorized function
         distances = SDF.distance_from_star_contour_vectorized(coordinates, device=device)
@@ -45,7 +46,7 @@ def generate_data(num_samples, fun_num=0, device=None, data_gen_params={}):
     elif fun_num == 5: # infinite line
         angle = data_gen_params.get('angle', 0.0)  # angle in radians
         offset = data_gen_params.get('offset', 0.0)  # perpendicular offset from origin
-        margain = 0.1
+        margain = data_gen_params.get('margain', 0.0)
         coordinates = torch.rand(num_samples, 2, device=device) * (2+margain*2) - 1 - margain
         distances = SDF.distance_from_line_vectorized(coordinates, angle=angle, offset=offset, device=device)
         return coordinates, distances.view(-1, 1)
@@ -85,7 +86,7 @@ def generate_standard_boundary_points(num_boundary_points, fun_num=0, device=Non
             boundary_points += noise
             boundary_points = torch.clamp(boundary_points, -1.1, 1.1)
             # SDF for circle: 1 - x^2 - y^2
-            sdf_val = 1 - boundary_points[:, 0]**2 - boundary_points[:, 1]**2
+            sdf_val = 1 - torch.sqrt(boundary_points[:, 0]**2 + boundary_points[:, 1]**2)
             return boundary_points, sdf_val.view(-1, 1)
         return boundary_points
     
@@ -371,11 +372,29 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
             pts, target = generate_bspline_data(batch_size, case=fun_num, device=device, data_gen_params=data_gen_params, gt_num_curve_samples=gt_num_curve_samples, use_refinement=use_refinement)
         else:
             raise NotImplementedError("Data generation mode not implemented")
-        for model in model_list:
+        for idx, model in enumerate(model_list):
             model.to(device)
             pred = model(pts)
             loss = evaluation_coeff * criterion(pred, target)
-            if eikon_coeff > 0.0:
+
+            if isinstance(eikon_coeff, (list, tuple)):
+                current_eikon_coeff = eikon_coeff[idx]
+            else:
+                current_eikon_coeff = eikon_coeff
+            if isinstance(boundry_coeff, (list, tuple)):
+                current_boundry_coeff = boundry_coeff[idx]
+            else:
+                current_boundry_coeff = boundry_coeff
+            if isinstance(importance_sampling_coeff, (list, tuple)):
+                current_importance_sampling_coeff = importance_sampling_coeff[idx]
+            else:
+                current_importance_sampling_coeff = importance_sampling_coeff
+            if isinstance(importance_sampling_params, (list, tuple)):
+                current_importance_sampling_params = importance_sampling_params[idx]
+            else:
+                current_importance_sampling_params = importance_sampling_params
+
+            if current_eikon_coeff > 0.0:
                 # Eikonal term
                 pts.requires_grad_(True)
                 pred_eik = model(pts)
@@ -383,8 +402,8 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                                             grad_outputs=torch.ones_like(pred_eik),
                                             create_graph=True, retain_graph=True)[0]
                 eikonal_term = ((grads.norm(dim=1) - 1) ** 2).mean()
-                loss += eikon_coeff * eikonal_term
-            if boundry_coeff > 0.0:
+                loss += current_eikon_coeff * eikonal_term
+            if current_boundry_coeff > 0.0:
                 # Generating boundary points based on data generation mode
                 if data_gen_mode == 'bspline':
                     bndr_pts = generate_bspline_boundary_points(num_boundary_points=batch_size, case=fun_num, device=device, data_gen_params=data_gen_params)
@@ -392,20 +411,20 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                     bndr_pts = generate_standard_boundary_points(num_boundary_points=batch_size, fun_num=fun_num, device=device, data_gen_params=data_gen_params)
                 bndr_pred = model(bndr_pts)
                 boundary_term = (bndr_pred ** 2).mean()
-                loss += boundry_coeff * boundary_term
+                loss += current_boundry_coeff * boundary_term
             if xi_coeff > 0.0:
                 xi_term = torch.exp(-100 * torch.abs(pred)).mean()
                 loss += xi_coeff * xi_term
             if boundary_norm_coeff > 0.0:
                 raise NotImplementedError("Boundary norm term not implemented in this snippet.")
-            if use_importance_sampling and importance_sampling_coeff > 0.0:
+            if use_importance_sampling and current_importance_sampling_coeff > 0.0:
                 # Importance sampling based on data generation mode
                 if data_gen_mode == 'bspline':
-                    bndr_pts, targets = generate_bspline_boundary_points(num_boundary_points=batch_size, case=fun_num, device=device, data_gen_params=data_gen_params, use_importance_sampling=True, importance_sampling_params=importance_sampling_params, gt_num_curve_samples=gt_num_curve_samples, use_refinement=use_refinement)
+                    bndr_pts, targets = generate_bspline_boundary_points(num_boundary_points=batch_size, case=fun_num, device=device, data_gen_params=data_gen_params, use_importance_sampling=True, importance_sampling_params= current_importance_sampling_params, gt_num_curve_samples=gt_num_curve_samples, use_refinement=use_refinement)
                 else:
-                    bndr_pts, targets = generate_standard_boundary_points(num_boundary_points=batch_size, fun_num=fun_num, device=device, data_gen_params=data_gen_params, use_importance_sampling=True, importance_sampling_params=importance_sampling_params)
+                    bndr_pts, targets = generate_standard_boundary_points(num_boundary_points=batch_size, fun_num=fun_num, device=device, data_gen_params=data_gen_params, use_importance_sampling=True, importance_sampling_params=current_importance_sampling_params)
                 bndr_pred = model(bndr_pts)
-                loss += importance_sampling_coeff * criterion(bndr_pred, targets)
+                loss += current_importance_sampling_coeff * criterion(bndr_pred, targets)
 
             model.optimizer.zero_grad()
             loss.backward()

@@ -3,6 +3,9 @@ import matplotlib.pyplot as plt
 import torch
 import FEM
 
+# Use float64 for better numerical accuracy
+TORCH_DTYPE = torch.float64
+NP_DTYPE = np.float64
 
 EPS = 0.9
 USE_SIGMOID_FOR_DISTANCE = False
@@ -41,7 +44,7 @@ def getDefaultValues(div=2,order=1,delta = 0,larger_domain = True):
     yDivision = div
     return x0, y0,x1,y1,xDivision,yDivision,p,q
 def distanceFromContur(x,y,model,transform=TRANSFORM):
-    crd = torch.tensor([x,y],requires_grad=False,dtype=torch.float32)
+    crd = torch.tensor([x,y],requires_grad=False,dtype=TORCH_DTYPE)
     d = model(crd)
     if transform == "sigmoid":
         d = sigmoid(d).item()
@@ -70,7 +73,7 @@ def dddy(x,y, model):
     return dx 
 """
 def distance_with_derivative(x,y,model,transform=TRANSFORM):
-    crd = torch.tensor([x,y],requires_grad=True,dtype=torch.float32)
+    crd = torch.tensor([x,y],requires_grad=True,dtype=TORCH_DTYPE)
     d = model(crd)
     d.backward()
     dx = crd.grad[0].item()
@@ -87,11 +90,11 @@ def distance_with_derivative(x,y,model,transform=TRANSFORM):
     elif transform == "trapezoid":
         d = torch.where(d * TANG < 1, d * TANG, 1)
         mask = d.squeeze()*TANG > 1
-        dx = torch.where(mask, torch.tensor(0.0), dx * TANG)
-        dy = torch.where(mask, torch.tensor(0.0), dy * TANG)
+        dx = torch.where(mask, torch.tensor(0.0, dtype=TORCH_DTYPE), dx * TANG)
+        dy = torch.where(mask, torch.tensor(0.0, dtype=TORCH_DTYPE), dy * TANG)
     return d,dx,dy
 def distance_with_derivative_vect_trasformed(x,y,model,transform=TRANSFORM):
-    crd = torch.tensor(np.array([x,y]),dtype=torch.float32).T
+    crd = torch.tensor(np.array([x,y]),dtype=TORCH_DTYPE).T
     crd.requires_grad = True
     d = model(crd)
     grds = torch.autograd.grad(outputs=d, inputs=crd, grad_outputs=torch.ones_like(d),retain_graph=True)
@@ -117,8 +120,8 @@ def distance_with_derivative_vect_trasformed(x,y,model,transform=TRANSFORM):
         
         d = torch.where(d * TANG < 1, d * TANG, 1)
         mask = d.squeeze()*TANG > 1
-        dx = torch.where(mask, torch.tensor(0.0), dx * TANG)
-        dy = torch.where(mask, torch.tensor(0.0), dy * TANG)
+        dx = torch.where(mask, torch.tensor(0.0, dtype=TORCH_DTYPE), dx * TANG)
+        dy = torch.where(mask, torch.tensor(0.0, dtype=TORCH_DTYPE), dy * TANG)
 
     #crd.grad.zero_()
     return d,dx,dy

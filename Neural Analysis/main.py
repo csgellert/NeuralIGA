@@ -16,10 +16,10 @@ import Geomertry
 from network_defs import load_test_model
 #torch.set_default_dtype(torch.float64)
 
-model = load_test_model("SIREN_circle", "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 30.0})
-
-DIVISIONS = 50
-ORDER = 3
+#model = load_test_model("SIREN_circle", "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 30.0})
+model = Geomertry.AnaliticalDistanceCircle()
+DIVISIONS = 8
+ORDER = 1
 DELTA = 0.005
 
 
@@ -42,12 +42,6 @@ F = np.zeros((xDivision+p+1)*(yDivision+q+1))
 print("Initialisation finished")
 start = time.time()
 with cProfile.Profile() as pr:
-    """
-    for elemx in tqdm(range(p,p+xDivision+1)):
-        for elemy in range(q,q+xDivision+1):
-            Ke,Fe = FEM.elementChoose(model,p,q,knotvector_u,knotvector_w,elemx,elemy,None)
-            K,F = FEM.assembly(K,F,Ke,Fe,elemx,elemy,p,q,xDivision,yDivision)
-    """
     K, F, etype = FEM.processAllElements(model, p, q, knotvector_u, knotvector_w, 
                                       xDivision, yDivision, K, F)
 end = time.time()
@@ -64,10 +58,11 @@ print("Solving equation")
 result = FEM.solveWeak(K,F)
 print(f"Calculation time: {time.time()-start} ms")
 print(f"p={p}\tdiv = {xDivision}")
-evaluation.plotErrorHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=False,N=40)
-evaluation.plotResultHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=FEM.LARGER_DOMAIN,N=50)
+#evaluation.plotErrorHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=False,N=40)
+#evaluation.plotResultHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=FEM.LARGER_DOMAIN,N=50)
 
 
 evaluation.visualizeResultsBspline(model,result,p,q,knotvector_u,knotvector_w)
 
-
+metrics = evaluation.evaluateAccuracy(model, result, p, q, knotvector_u, knotvector_w, N=10000, seed=42)
+evaluation.printErrorMetrics(metrics)  # Pretty print all metrics

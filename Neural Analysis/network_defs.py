@@ -442,7 +442,7 @@ def load_test_model(name, type, params = {}):
         w_0 = params.get("w_0", 30)
         w_hidden = params.get("w_hidden", 30)
         model = Siren(architecture=architecture, outermost_linear=True, first_omega_0=w_0, hidden_omega_0=w_hidden)
-        model.load_state_dict(torch.load(f"trained_models/{name}.pth", map_location=torch.device('cpu')))
+        model.load_state_dict(torch.load(f"trained_models/{name}.pth", map_location=torch.device('cpu'), weights_only=True))
         model = model.double()  # Convert to float64
         model.eval()
         return model

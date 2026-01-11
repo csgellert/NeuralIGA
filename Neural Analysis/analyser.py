@@ -1,25 +1,83 @@
 import numpy as np
+import torch
+import evaluation
+import json
+from datetime import datetime
+
+# Use float64 for better numerical accuracy
+torch.set_default_dtype(torch.float64)
+
 import FEM
 import mesh
-from tqdm import tqdm
-import matplotlib.pyplot as plt
 import Geomertry
-import NeuralImplicit
+from network_defs import load_test_model
 
-model = NeuralImplicit.load_models("analitical_model")
-model = model
 
+def save_simulation_results(filename, mdl_name, test_values, orders, all_eval_stats, 
+                            function_case=None, max_subdivision=None):
+    """
+    Save simulation results to a JSON file.
+    
+    Parameters:
+    -----------
+    filename : str
+        Path to the output file
+    mdl_name : str
+        Name of the model used
+    test_values : list
+        List of division values tested
+    orders : list
+        List of B-spline orders tested
+    all_eval_stats : dict
+        Dictionary with keys as (order, division) tuples and values as eval_stats dicts
+    function_case : int, optional
+        The FEM.FUNCTION_CASE parameter
+    max_subdivision : int, optional
+        The FEM.MAX_SUBDIVISION parameter
+    """
+    # Convert tuple keys to string keys for JSON compatibility
+    results_serializable = {}
+    for (order, division), stats in all_eval_stats.items():
+        key = f"order_{order}_div_{division}"
+        # Convert numpy types to Python native types
+        results_serializable[key] = {k: float(v) if isinstance(v, (np.floating, float)) else int(v) 
+                                      for k, v in stats.items()}
+    
+    data = {
+        "model_name": mdl_name,
+        "test_values": test_values,
+        "orders": orders,
+        "function_case": function_case,
+        "max_subdivision": max_subdivision,
+        "timestamp": datetime.now().isoformat(),
+        "eval_stats": results_serializable
+    }
+    
+    with open(filename, 'w') as f:
+        json.dump(data, f, indent=4)
+    
+    print(f"Results saved to {filename}")
+
+
+mdl_name = "SIREN_circle_1_2"
+model = load_test_model(mdl_name, "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 15.0})
+#mdl_name = "AnalyticalDistanceCircle"
+#model = Geomertry.AnaliticalDistanceCircle()
 r=1
 
-test_values = [110]
+test_values = [10, 20,50,80,100]
+orders = [1,2,3]
+
 esize = [1/(nd+1) for nd in test_values]
-orders = [2]
-fig,ax = plt.subplots()
+
+all_eval_stats = {}  # Store all evaluation stats
+
 for order in orders:                                                                            
     accuracy = []
     etypes = []
+    eval_stats = []
     for division in test_values:
-        etype = {"outer":0,"inner":0,"boundary":0}
+        print(f"Running simulation for order={order}, division={division}")
         default = mesh.getDefaultValues(div=division,order=order,delta=0.005,larger_domain=FEM.LARGER_DOMAIN)
         x0, y0,x1,y1,xDivision,yDivision,p,q = default
         knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
@@ -33,27 +91,24 @@ for order in orders:
         
         K = np.zeros(((xDivision+p+1)*(yDivision+q+1),(xDivision+p+1)*(yDivision+q+1)))
         F = np.zeros((xDivision+p+1)*(yDivision+q+1))
-        for elemx in tqdm(range(p,p+xDivision+1)):
-            for elemy in range(q,q+xDivision+1):
-                Ke,Fe,etype = FEM.elementChoose(model,p,q,knotvector_u,knotvector_w,elemx,elemy,etype)
-                K,F = FEM.assembly(K,F,Ke,Fe,elemx,elemy,p,q,xDivision,yDivision)
-        #print(dirichlet)
-        result = FEM.solveWeak(K,F)
-        accuracy.append(FEM.calculateErrorBspline(model,result,p,q,knotvector_u, knotvector_w,larger_domain=FEM.LARGER_DOMAIN))
-        etypes.append(etype)
-    #ax.semilogy(test_values,accuracy)
-    ax.loglog(esize,accuracy)
-ax.set_title("Convergence of MSE based on number of elements")
-#ax.set_xlabel("Number of divisions")
-ax.set_xlabel("log(Element size)")
-ax.set_ylabel("log(Mean Square Error)")
-ax.legend(["p=1","p=2","p=3"])
+        K, F, etype = FEM.processAllElements(model, p, q, knotvector_u, knotvector_w, xDivision, yDivision, K, F)
 
-plt.show()
-inner = np.array([case["inner"] for case in etypes])
-outer = np.array([case["outer"] for case in etypes])
-boundary = np.array([case["boundary"] for case in etypes])
-print(etypes)
-fig,ax = plt.subplots()
-ax.loglog(esize,(inner+boundary)/(inner+boundary+outer))
-plt.show()
+        result = FEM.solveWeak(K,F)
+
+        eval_stats = evaluation.evaluateAccuracy(model, result, p, q, knotvector_u, knotvector_w, N=10000, seed=42)
+        accuracy.append(eval_stats["MAE"])
+        evaluation.printErrorMetrics(eval_stats)
+        
+        # Store results for this configuration
+        all_eval_stats[(order, division)] = eval_stats
+
+# Save all results to file
+save_simulation_results(
+    filename=f"simulation_results_{mdl_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+    mdl_name=mdl_name,
+    test_values=test_values,
+    orders=orders,
+    all_eval_stats=all_eval_stats,
+    function_case=FEM.FUNCTION_CASE,
+    max_subdivision=FEM.MAX_SUBDIVISION
+)

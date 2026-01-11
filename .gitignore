@@ -13,6 +13,9 @@ experinemtiing.py
 # 3D data files
 *.obj
 
+# json files
+*.json
+
 #numpy savings
 *.npz
 

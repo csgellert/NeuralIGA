@@ -40,7 +40,8 @@ def generate_data(num_samples, fun_num=0, device=None, data_gen_params={}):
         
         return coordinates, distances.view(-1, 1)
     elif fun_num == 4: # L-shape
-        coordinates = 2 * torch.rand(num_samples, 2, device=device) - 1
+        margain = data_gen_params.get('margain', 0.0)
+        coordinates = (2+2*margain) * torch.rand(num_samples, 2, device=device) - 1 - margain
         distances = SDF.distance_from_L_shape_vectorized(coordinates, device=device)
         return coordinates, distances.view(-1, 1)
     elif fun_num == 5: # infinite line

@@ -120,9 +120,10 @@ def generate_standard_boundary_points(num_boundary_points, fun_num=0, device=Non
     
     elif fun_num == 4:  # L-shape
         # L-shape corners
-        corners = torch.tensor([(0.0, 1.0), (0.0, 0.0), (1.0, 0.0), (1.0, 0.5), (0.5, 0.5), (0.5, 1.0)], device=device)
+        corners = torch.tensor([(-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (1.0, 0.0), (0.0, 0.0), (0.0, 1.0)], device=device)
         num_corners = corners.shape[0]
-        
+        range_min = data_gen_params.get('range_min', -1.005)
+        range_max = data_gen_params.get('range_max', 1.005)
         # Randomly select edges and positions
         edge_indices = torch.randint(0, num_corners, (num_boundary_points,), device=device)
         t = torch.rand(num_boundary_points, device=device)
@@ -135,7 +136,7 @@ def generate_standard_boundary_points(num_boundary_points, fun_num=0, device=Non
         if use_importance_sampling:
             noise = torch.randn_like(boundary_points, device=device) * sigma
             boundary_points += noise
-            boundary_points = torch.clamp(boundary_points, -0.1, 1.1)
+            boundary_points = torch.clamp(boundary_points, range_min, range_max)
             sdf_val = SDF.distance_from_L_shape_vectorized(boundary_points, device=device)
             return boundary_points, sdf_val.view(-1, 1)
         return boundary_points

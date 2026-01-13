@@ -7,9 +7,7 @@ torch.set_default_dtype(torch.float64)
 
 import FEM
 import mesh
-from tqdm import tqdm
 import time
-import NeuralImplicit 
 import cProfile
 from pstats import Stats
 import Geomertry
@@ -18,7 +16,7 @@ from network_defs import load_test_model
 
 #model = load_test_model("SIREN_circle", "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 30.0})
 model = Geomertry.AnaliticalDistanceCircle()
-DIVISIONS = 8
+DIVISIONS = 100
 ORDER = 1
 DELTA = 0.005
 
@@ -32,9 +30,9 @@ x = np.linspace(x0,x1,10)
 y = np.linspace(y0,y1,10)
 NControl_u = len(knotvector_u)-p-1
 NControl_w = len(knotvector_w)-q-1
-#mesh.plotMesh(xDivision,yDivision,delta=0.005)
+mesh.plotMesh(xDivision,yDivision,delta=0.005)
 #mesh.plotAlayticHeatmap(FEM.solution_function)
-#mesh.plotDisctancefunction(model)
+mesh.plotDisctancefunction(model)
 Geomertry.init_spl(x,p,None,knotvector_u)
 
 K = np.zeros(((xDivision+p+1)*(yDivision+q+1),(xDivision+p+1)*(yDivision+q+1)))
@@ -58,7 +56,7 @@ print("Solving equation")
 result = FEM.solveWeak(K,F)
 print(f"Calculation time: {time.time()-start} ms")
 print(f"p={p}\tdiv = {xDivision}")
-#evaluation.plotErrorHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=False,N=40)
+evaluation.plotErrorHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=False,N=40)
 #evaluation.plotResultHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=FEM.LARGER_DOMAIN,N=50)
 
 

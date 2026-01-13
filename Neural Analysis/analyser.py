@@ -49,6 +49,7 @@ def save_simulation_results(filename, mdl_name, test_values, orders, all_eval_st
         "orders": orders,
         "function_case": function_case,
         "max_subdivision": max_subdivision,
+        "transform": mesh.TRANSFORM,
         "timestamp": datetime.now().isoformat(),
         "eval_stats": results_serializable
     }
@@ -59,11 +60,13 @@ def save_simulation_results(filename, mdl_name, test_values, orders, all_eval_st
     print(f"Results saved to {filename}")
 
 
-mdl_name = "SIREN_circle_1_2"
-model = load_test_model(mdl_name, "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 15.0})
-#mdl_name = "AnalyticalDistanceCircle"
-#model = Geomertry.AnaliticalDistanceCircle()
-r=1
+#mdl_name = "SIREN_circle_1_2" #! check network params!!
+#model = load_test_model(mdl_name, "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 15.0})
+mdl_name = "AnalyticalDistanceCircleTanh"
+model = Geomertry.AnaliticalDistanceCircle()
+FEM.FUNCTION_CASE = 3
+FEM.MAX_SUBDIVISION = 4
+mesh.TRANSFORM = 'tanh'
 
 test_values = [10, 20,50,80,100]
 orders = [1,2,3]

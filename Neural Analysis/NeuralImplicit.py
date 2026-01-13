@@ -119,7 +119,7 @@ def generate_standard_boundary_points(num_boundary_points, fun_num=0, device=Non
     
     elif fun_num == 4:  # L-shape
         # L-shape corners
-        corners = torch.tensor([(0.0, 1.0), (0.0, 0.0), (1.0, 0.0), (1.0, 0.5), (0.5, 0.5), (0.5, 1.0)], device=device)
+        corners = torch.tensor([(-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (1.0, 0.0), (0.0, 0.0), (0.0, 1.0)], device=device)
         num_corners = corners.shape[0]
         
         # Randomly select edges and positions

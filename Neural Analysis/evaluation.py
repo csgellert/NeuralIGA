@@ -111,9 +111,13 @@ def evaluateAccuracy(model, results, p, q, knotvector_x, knotvector_y, N=1000, s
         bspline_sum_dx = 0.0
         bspline_sum_dy = 0.0
         
+        # Note: coefficients are stored as results[i * n_basis_y + j]
+        # where i is the x-basis index and j is the y-basis index
+        # This matches the assembly indexing: (x_idx) * stride + (y_idx)
+        # where stride = n_basis_y
         for i in range(n_basis_x):
             for j in range(n_basis_y):
-                coeff = results[n_basis_x * i + j]
+                coeff = results[i * n_basis_y + j]
                 N_ij = bxi[i] * beta[j]
                 dN_ij_dx = dbxi[i] * beta[j]
                 dN_ij_dy = bxi[i] * dbeta[j]
@@ -123,9 +127,9 @@ def evaluateAccuracy(model, results, p, q, knotvector_x, knotvector_y, N=1000, s
                 bspline_sum_dy += dN_ij_dy * coeff
         
         # Get Dirichlet boundary values and derivatives
-        g = FEM.dirichletBoundary(xx, yy)
-        dg_dx = FEM.dirichletBoundaryDerivativeX(xx, yy)
-        dg_dy = FEM.dirichletBoundaryDerivativeY(xx, yy)
+        g = FEM.dirichletBoundary_vectorized(xx, yy)
+        dg_dx = FEM.dirichletBoundaryDerivativeX_vectorized(xx, yy)
+        dg_dy = FEM.dirichletBoundaryDerivativeY_vectorized(xx, yy)
         
         # Numerical solution: u_h = d * phi + (1-d) * g
         u_h = d_val * bspline_sum + (1 - d_val) * g
@@ -241,7 +245,7 @@ def visualizeResultsBspline(model,results,p,q,knotvector_x, knotvector_y):
                     sum += Geomertry.B(xx,p,xbasis,knotvector_x)*Geomertry.B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
             sum = d*sum
             #sum = 0
-            sum += (1-d)*FEM.dirichletBoundary(xx,yy)
+            sum += (1-d)*FEM.dirichletBoundary_vectorized(xx,yy)
             if d<0: sum = 0
             try:
                 result.append(sum.item())
@@ -278,7 +282,7 @@ def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y,larger_do
                     sum += Geomertry.B(xx,p,xbasis,knotvector_x)*Geomertry.B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
             sum = d*sum
             #sum = 0
-            sum += (1-d)*FEM.dirichletBoundary(xx,yy)
+            sum += (1-d)*FEM.dirichletBoundary_vectorized(xx,yy)
             if d<0: sum = 0
             result.append(sum)
     MSE = (np.square(np.array(result)-np.array(analitical))).mean()
@@ -301,19 +305,13 @@ def plotErrorHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain =
                     sum += Geomertry.B(xx,p,xbasis,knotvector_x)*Geomertry.B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
             sum = d*sum
             #sum = 0
-            sum += (1-d)*FEM.dirichletBoundary(xx,yy)
+            sum += (1-d)*FEM.dirichletBoundary_vectorized(xx,yy)
             if d<0: sum = 0
             Z_N[idxx,idxy] = sum
     #MSE = (np.square(np.array(result)-np.array(analitical))).mean()
     #print(f"MSE: {MSE}")
     #return MSE
     plt.contourf(X, Y, Z_N,levels=20)
-    points = [(0.0, 1.0), (0.0, 0.0), (1.0, 0.0),(1.0,0.5),(0.5,0.5),(0.5,1.0),(0.0, 1.0)]
-
-    # Plot red lines between the points
-    for i in range(len(points)-1):
-            plt.plot([points[i][0], points[i+1][0]], [points[i][1], points[i+1][1]], 'r-')
-
     #plt.axis('equal')
     #highlight_level = 0.0
     #plt.contour(X, Y, Z, levels=[highlight_level], colors='red')
@@ -340,7 +338,7 @@ def plotResultHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain 
                     sum += Geomertry.B(xx,p,xbasis,knotvector_x)*Geomertry.B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
             sum = d*sum
             #sum = 0
-            sum += (1-d)*FEM.dirichletBoundary(xx,yy)
+            sum += (1-d)*FEM.dirichletBoundary_vectorized(xx,yy)
             if d<0: sum = 0
             Z_N[idxx,idxy] = sum
     #MSE = (np.square(np.array(result)-np.array(analitical))).mean()
@@ -394,7 +392,7 @@ def load_simulation_results(filepath):
     return data
 
 
-def visualize_results(filepath, metric='MAE', log_scale=True):
+def visualize_results(filepath, metric='MAE', log_scale=True, plot_num_of_elements=False):
     """
     Visualize simulation results from a JSON file.
     
@@ -440,7 +438,10 @@ def visualize_results(filepath, metric='MAE', log_scale=True):
         
         if divisions:
             # Element size = domain_size / (divisions + 1)
-            element_sizes = [1.0 / (d + 1) for d in divisions]
+            if plot_num_of_elements:
+                element_sizes = [(d+1)**2 for d in divisions]
+            else:
+                element_sizes = [1.0 / (d + 1) for d in divisions]
             
             ax.plot(element_sizes, metric_values, 
                    marker=markers[idx % len(markers)],

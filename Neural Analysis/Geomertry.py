@@ -105,11 +105,11 @@ def l_shape_distance(crd):
     """
     x = crd[..., 0]
     y = crd[..., 1]
-    # Define the L-shape as the union of two rectangles: [0,1]x[0,0.5] and [0,0.5]x[0.5,1]
-    # The boundary consists of 6 segments (corners closed)
+    # Define the L-shape with larger coordinates
+    # The boundary consists of the segments connecting these corners
     corners = [
-        (0.0, 1.0), (0.0, 0.0), (1.0, 0.0), (1.0, 0.5),
-        (0.5, 0.5), (0.5, 1.0), (0.0, 1.0)
+        (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (1.0, 0.0),
+        (0.0, 0.0), (0.0, 1.0), (-1.0, 1.0)
     ]
     # Compute distance to each segment
     dists = [
@@ -118,9 +118,9 @@ def l_shape_distance(crd):
     ]
     dist = torch.min(torch.stack(dists), dim=0).values
 
-    # Inside test: inside if in [0,1]x[0,0.5] or [0,0.5]x[0.5,1]
-    inside_rect1 = (x >= 0) & (x <= 1) & (y >= 0) & (y <= 0.5)
-    inside_rect2 = (x >= 0) & (x <= 0.5) & (y > 0.5) & (y <= 1)
+    # Inside test: inside if in [-1,1]x[-1,0] or [-1,0]x[0,1]
+    inside_rect1 = (x >= -1) & (x <= 1) & (y >= -1) & (y <= 0)
+    inside_rect2 = (x >= -1) & (x <= 0) & (y > 0) & (y <= 1)
     inside = inside_rect1 | inside_rect2
     sign = - torch.where(inside, -1.0, 1.0)
     # Ensure sign is on the same device and dtype as dist

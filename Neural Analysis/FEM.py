@@ -22,24 +22,51 @@ _GAUSS_CACHE = {}
 DOMAIN = {"x1": -1, "x2": 1, "y1": -1, "y2": 1}
 
 def _get_gauss_points(p):
-    """Cache Gauss quadrature points and weights"""
+    """Cache Gauss quadrature points and weights.
+    
+    For B-spline of order p, the integrand in the stiffness matrix involves
+    products of derivatives of order p-1, so we need to integrate polynomials
+    of degree 2*(p-1). n Gauss points can exactly integrate polynomials of 
+    degree 2n-1, so we need n >= p Gauss points per direction.
+    
+    Additionally, for higher accuracy with the distance function (which may be
+    non-polynomial), we use one extra point.
+    """
     if p in _GAUSS_CACHE:
         return _GAUSS_CACHE[p]
     
     if p <= 2:
+        # 2x2 Gauss quadrature - integrates exactly up to degree 3
         g = np.array([-1/math.sqrt(3), 1/math.sqrt(3)])
-        w = np.array([1,1])
-        gaussP_x = np.array([g[0],g[0],g[1],g[1]])
-        gaussP_y = np.array([g[0],g[1],g[0],g[1]])
-        gauss_weights = np.array([w[0],w[0],w[1],w[1]])
-        num_gauss_points = 4
-    else:
-        g = np.array([-math.sqrt(3/5), 0, math.sqrt(3/5)])
+        w = np.array([1.0, 1.0])
+    elif p == 3:
+        # 3x3 Gauss quadrature - integrates exactly up to degree 5
+        g = np.array([-math.sqrt(3/5), 0.0, math.sqrt(3/5)])
         w = np.array([5/9, 8/9, 5/9])
-        gaussP_x = np.array([g[0],g[0],g[0],g[1],g[1],g[1],g[2],g[2],g[2]])
-        gaussP_y = np.array([g[0],g[1],g[2],g[0],g[1],g[2],g[0],g[1],g[2]])
-        gauss_weights = np.array([w[0]*w[0],w[1]*w[0],w[2]*w[0],w[0]*w[1],w[1]*w[1],w[2]*w[1],w[0]*w[2],w[1]*w[2],w[2]*w[2]])
-        num_gauss_points = 9
+    elif p == 4:
+        # 4x4 Gauss quadrature - integrates exactly up to degree 7
+        g1 = math.sqrt(3/7 - 2/7*math.sqrt(6/5))
+        g2 = math.sqrt(3/7 + 2/7*math.sqrt(6/5))
+        w1 = (18 + math.sqrt(30)) / 36
+        w2 = (18 - math.sqrt(30)) / 36
+        g = np.array([-g2, -g1, g1, g2])
+        w = np.array([w2, w1, w1, w2])
+    else:
+        # 5x5 Gauss quadrature for p >= 5 - integrates exactly up to degree 9
+        g1 = 1/3 * math.sqrt(5 - 2*math.sqrt(10/7))
+        g2 = 1/3 * math.sqrt(5 + 2*math.sqrt(10/7))
+        w1 = (322 + 13*math.sqrt(70)) / 900
+        w2 = (322 - 13*math.sqrt(70)) / 900
+        w0 = 128/225
+        g = np.array([-g2, -g1, 0.0, g1, g2])
+        w = np.array([w2, w1, w0, w1, w2])
+    
+    # Build 2D tensor product quadrature
+    n_1d = len(g)
+    gaussP_x = np.repeat(g, n_1d)  # [g0,g0,...,g0, g1,g1,...,g1, ...]
+    gaussP_y = np.tile(g, n_1d)    # [g0,g1,...,gn, g0,g1,...,gn, ...]
+    gauss_weights = np.outer(w, w).flatten()  # w_i * w_j
+    num_gauss_points = n_1d * n_1d
     
     result = (gaussP_x, gaussP_y, gauss_weights, num_gauss_points)
     _GAUSS_CACHE[p] = result
@@ -110,25 +137,7 @@ def dirichletBoundaryDerivativeY_vectorized(x, y):
     else: 
         raise NotImplementedError
 
-def load_function(x,y):
-    #! -f(x)
-    if FUNCTION_CASE == 1:
-        return -8*x
-    elif FUNCTION_CASE == 2:
-        arg = (x**2 + y**2)*math.pi/2
-        return -(-2*math.pi*math.sin(arg)-math.cos(arg)*(x**2 + y**2)*math.pi**2)
-    elif FUNCTION_CASE == 3:
-        return -8*x
-    elif FUNCTION_CASE == 4:
-        return -8*x
-    elif FUNCTION_CASE == 5:#L-shape
-        return 8*math.pi*math.pi*math.sin(2*math.pi*x)*math.sin(2*math.pi*y)
-    elif FUNCTION_CASE == 6: #tube
-        return -(x**2 + y**2)
-    elif FUNCTION_CASE == 7: #double circle
-        arg = (x**2 + y**2)*math.pi
-        return 4*math.pi*math.cos(arg) - 4*math.pi* arg*math.sin(arg)
-    raise NotImplementedError
+
 def solution_function(x,y):
     if FUNCTION_CASE == 1:
         return x*(x**2 + y**2 -1)
@@ -156,7 +165,6 @@ def solution_function_derivative_x(x,y):
         raise NotImplementedError
         return 3*x**2 + y**2 -1 +1
     elif FUNCTION_CASE == 5: #L-shape
-        raise NotImplementedError
         return 2*math.pi*math.cos(2*math.pi*x)*math.sin(2*math.pi*y)
     elif FUNCTION_CASE ==7: #double circle
         raise NotImplementedError
@@ -176,46 +184,11 @@ def solution_function_derivative_y(x,y):
         raise NotImplementedError
         return 2*x*y +2
     elif FUNCTION_CASE == 5: #L-shape
-        raise NotImplementedError
         return 2*math.pi*math.sin(2*math.pi*x)*math.cos(2*math.pi*y)
     elif FUNCTION_CASE ==7: #double circle
         raise NotImplementedError
         arg = (x**2 + y**2)*math.pi
         return 2*math.pi*y*math.cos(arg)
-    else: raise NotImplementedError
-def dirichletBoundary(x,y):
-    if FUNCTION_CASE == 1:
-        return 2
-    if FUNCTION_CASE == 2:
-        return 0
-    if FUNCTION_CASE == 3:
-        return 2
-    if FUNCTION_CASE == 4:
-        return x+2*y
-    elif FUNCTION_CASE == 5:
-        return 0
-    elif FUNCTION_CASE == 7:
-        return 0
-    else: raise NotImplementedError
-def dirichletBoundaryDerivativeX(x,y):
-    if FUNCTION_CASE <= 3:
-        return 0
-    elif FUNCTION_CASE == 4:
-        return 1
-    elif FUNCTION_CASE == 5:#L-shape
-        return 0
-    elif FUNCTION_CASE == 7:
-        return 0
-    else: raise NotImplementedError
-def dirichletBoundaryDerivativeY(x,y):
-    if FUNCTION_CASE <= 3:
-        return 0
-    elif FUNCTION_CASE == 4:
-        return 2
-    elif FUNCTION_CASE ==5:  #L-shape
-        return 0
-    elif FUNCTION_CASE == 7:
-        return 0
     else: raise NotImplementedError
 
 def element(model,p,q,knotvector_x, knotvector_y,i,j,Bspxi,Bspeta):
@@ -240,11 +213,11 @@ def Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,l
     
     if level == MAXLEVEL:
         # At maximum level, perform Gauss quadrature on 4 subdomains
-        # Combine all 4 subdomains into a single more efficient call
+        # Each GaussQuadrature call now includes the correct Jacobian for its subdomain
         halfx = (x1 + x2) * 0.5
         halfy = (y1 + y2) * 0.5
         
-        # Accumulate directly without intermediate scaling
+        # Accumulate directly - the Jacobian is already included in each GaussQuadrature call
         K = np.zeros((n_basis, n_basis))
         F = np.zeros(n_basis)
         
@@ -260,8 +233,8 @@ def Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,l
             K += Ks
             F += Fs
         
-        # Scale once at the end
-        return K * 0.25, F * 0.25
+        # No scaling needed - Jacobian is correctly handled in GaussQuadrature
+        return K, F
     else:
         # Recursive subdivision - use in-place accumulation
         halfx = (x1 + x2) * 0.5
@@ -283,7 +256,8 @@ def Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,l
             K += Kret
             F += Fret
         
-        return K * 0.25, F * 0.25
+        # No scaling needed - Jacobian is correctly handled in child calls
+        return K, F
 
 def GaussQuadrature(model,x1,x2,y1,y2,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta):
     """Fully vectorized Gauss quadrature - eliminates all Python loops over Gauss points"""
@@ -295,8 +269,13 @@ def GaussQuadrature(model,x1,x2,y1,y2,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bs
     F = np.zeros(n_basis)
     
     # Transform Gauss points to physical coordinates
-    xi = (x2-x1)/2 * gaussP_x + (x2+x1)/2
-    eta = (y2-y1)/2 * gaussP_y + (y2+y1)/2
+    # Jacobian of the coordinate transformation from [-1,1]x[-1,1] to [x1,x2]x[y1,y2]
+    Jxi = (x2 - x1) / 2
+    Jeta = (y2 - y1) / 2
+    Jacobian = Jxi * Jeta  # Determinant of the Jacobian matrix
+    
+    xi = Jxi * gaussP_x + (x2+x1)/2
+    eta = Jeta * gaussP_y + (y2+y1)/2
 
     # Get distance function and derivatives (already vectorized)
     d_,dx_,dy_ = mesh.distance_with_derivative_vect_trasformed(xi,eta,model)
@@ -384,15 +363,16 @@ def GaussQuadrature(model,x1,x2,y1,y2,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bs
         dirichlet_dy = np.asarray(dirichlet_dy).flatten()
     
     # Vectorized K matrix assembly using einsum
-    # K[m,n] = sum_g weight[g] * (corr_xi[g,m]*corr_xi[g,n] + corr_eta[g,m]*corr_eta[g,n])
+    # K[m,n] = sum_g weight[g] * Jacobian * (corr_xi[g,m]*corr_xi[g,n] + corr_eta[g,m]*corr_eta[g,n])
     weighted_corr_xi = corr_xi * weights_valid[:, np.newaxis]  # (n_valid, n_basis)
     weighted_corr_eta = corr_eta * weights_valid[:, np.newaxis]  # (n_valid, n_basis)
     
     # Use einsum for outer product summation - this is the key optimization
-    K = np.einsum('gi,gj->ij', weighted_corr_xi, corr_xi) + np.einsum('gi,gj->ij', weighted_corr_eta, corr_eta)
+    # Include Jacobian from coordinate transformation
+    K = (np.einsum('gi,gj->ij', weighted_corr_xi, corr_xi) + np.einsum('gi,gj->ij', weighted_corr_eta, corr_eta)) * Jacobian
     
     # Vectorized F vector assembly
-    # F[m] = sum_g weight[g] * (f * d * N[m] + corr_xi[m]*(dx*dirichlet + d*ddir_x) 
+    # F[m] = sum_g weight[g] * Jacobian * (f * d * N[m] + corr_xi[m]*(dx*dirichlet + d*ddir_x) 
     #                          + corr_eta[m]*(dy*dirichlet + d*ddir_y) - ddir_x*corr_xi[m] - ddir_y*corr_eta[m])
     Ni_corr = d_valid[:, np.newaxis] * N_flat  # (n_valid, n_basis)
     
@@ -402,7 +382,7 @@ def GaussQuadrature(model,x1,x2,y1,y2,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bs
     term3 = dirichlet_dx[:, np.newaxis] * corr_xi + dirichlet_dy[:, np.newaxis] * corr_eta
     
     F_contrib = (term1 + term2_xi + term2_eta - term3) * weights_valid[:, np.newaxis]
-    F = np.sum(F_contrib, axis=0)
+    F = np.sum(F_contrib, axis=0) * Jacobian
     
     return K, F
 
@@ -556,7 +536,7 @@ def solveWeak(K, F):
     F_reduced = F[non_zero_rows]
     
     u = np.zeros(len(F))
-    
+    #print("condition number of reduced K:", np.linalg.cond(K_reduced))
     # Try scipy.linalg.solve for potentially better performance (uses LAPACK)
     try:
         from scipy import linalg
@@ -564,7 +544,7 @@ def solveWeak(K, F):
     except ImportError:
         # Fall back to numpy if scipy not available
         u_reduced = np.linalg.solve(K_reduced, F_reduced)
-    
+    print("Max error:", np.max(np.abs(K_reduced @ u_reduced - F_reduced)))
     u[non_zero_rows] = u_reduced
     return u
 

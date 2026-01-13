@@ -7,9 +7,9 @@ import FEM
 TORCH_DTYPE = torch.float64
 NP_DTYPE = np.float64
 
-EPS = 0.9
+
 USE_SIGMOID_FOR_DISTANCE = False
-TRANSFORM = "trapezoid"  # Options: "sigmoid", "tanh", None
+TRANSFORM = "tanh"  # Options: "sigmoid", "tanh", None
 #if TRANSFORM == "trapezoid": raise NameError("Trapezoid transform is not recommended, use sigmoid or tanh instead")
 TANG = 1  # Used for trapezoid transform, adjust as needed
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
@@ -57,21 +57,6 @@ def distanceFromContur(x,y,model,transform=TRANSFORM):
     elif transform == "trapezoid":
         d = torch.where(d * TANG < 1, d * TANG, 1)
     return d
-"""def dddx(x,y,model):
-    crd = torch.tensor([x,y],requires_grad=True,dtype=torch.float32)
-    d = model(crd)
-    d.backward()
-    dx = crd.grad[0].item()
-    crd.grad.zero_()
-    return dx 
-def dddy(x,y, model):
-    crd = torch.tensor([x,y],requires_grad=True,dtype=torch.float32)
-    d = model(crd)
-    d.backward()
-    dx = crd.grad[1].item()
-    crd.grad.zero_()
-    return dx 
-"""
 def distance_with_derivative(x,y,model,transform=TRANSFORM):
     crd = torch.tensor([x,y],requires_grad=True,dtype=TORCH_DTYPE)
     d = model(crd)

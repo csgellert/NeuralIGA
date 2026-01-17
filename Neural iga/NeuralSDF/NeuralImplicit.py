@@ -83,9 +83,11 @@ def generate_standard_boundary_points(num_boundary_points, fun_num=0, device=Non
         boundary_points = torch.stack([torch.cos(theta), torch.sin(theta)], dim=1)
         
         if use_importance_sampling:
+            range_min = data_gen_params.get('range_min', -1.005)
+            range_max = data_gen_params.get('range_max', 1.005)
             noise = torch.randn_like(boundary_points, device=device) * sigma
             boundary_points += noise
-            boundary_points = torch.clamp(boundary_points, -1.1, 1.1)
+            boundary_points = torch.clamp(boundary_points, range_min, range_max)
             # SDF for circle: 1 - x^2 - y^2
             sdf_val = 1 - torch.sqrt(boundary_points[:, 0]**2 + boundary_points[:, 1]**2)
             return boundary_points, sdf_val.view(-1, 1)

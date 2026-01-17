@@ -9,7 +9,7 @@ NP_DTYPE = np.float64
 
 
 USE_SIGMOID_FOR_DISTANCE = False
-TRANSFORM = "tanh"  # Options: "sigmoid", "tanh", None
+TRANSFORM = None  # Options: "sigmoid", "tanh", None
 #if TRANSFORM == "trapezoid": raise NameError("Trapezoid transform is not recommended, use sigmoid or tanh instead")
 TANG = 1  # Used for trapezoid transform, adjust as needed
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
@@ -32,7 +32,7 @@ def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     knotvector_w = np.insert(knotvector_w,0,[y0 for _ in range(q)])
     knotvector_w = np.append(knotvector_w,[y1 for _ in range(q)])
     return knotvector_u, knotvector_w, weights, ctrlpts
-def getDefaultValues(div=2,order=1,delta = 0,larger_domain = True):
+def getDefaultValues(div=2,order=1,delta = 0):
     assert delta >=0
     x0 = FEM.DOMAIN["x1"] - delta
     x1 = FEM.DOMAIN["x2"] + delta

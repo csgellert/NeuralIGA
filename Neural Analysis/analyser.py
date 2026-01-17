@@ -60,16 +60,16 @@ def save_simulation_results(filename, mdl_name, test_values, orders, all_eval_st
     print(f"Results saved to {filename}")
 
 
-#mdl_name = "SIREN_circle_1_2" #! check network params!!
-#model = load_test_model(mdl_name, "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 15.0})
-mdl_name = "AnalyticalDistanceCircleTanh"
-model = Geomertry.AnaliticalDistanceCircle()
+mdl_name = "SIREN_circle_1_4" #! check network params!!
+model = load_test_model(mdl_name, type="SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 8.0, "w_hidden": 8.0})
+#mdl_name = "AnalyticalDistanceCircleTanh"
+#model = Geomertry.AnaliticalDistanceCircle()
 FEM.FUNCTION_CASE = 3
 FEM.MAX_SUBDIVISION = 4
-mesh.TRANSFORM = 'tanh'
+mesh.TRANSFORM = None
 
-test_values = [10, 20,50,80,100]
-orders = [1,2,3]
+test_values = [10, 20, 50, 80, 100]
+orders = [1, 2, 3]
 
 esize = [1/(nd+1) for nd in test_values]
 
@@ -81,7 +81,7 @@ for order in orders:
     eval_stats = []
     for division in test_values:
         print(f"Running simulation for order={order}, division={division}")
-        default = mesh.getDefaultValues(div=division,order=order,delta=0.005,larger_domain=FEM.LARGER_DOMAIN)
+        default = mesh.getDefaultValues(div=division,order=order,delta=0.005)
         x0, y0,x1,y1,xDivision,yDivision,p,q = default
         knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
         assert p==q and xDivision == yDivision

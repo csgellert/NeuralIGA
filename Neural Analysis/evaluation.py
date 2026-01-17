@@ -308,15 +308,16 @@ def plotErrorHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain =
             sum += (1-d)*FEM.dirichletBoundary_vectorized(xx,yy)
             if d<0: sum = 0
             Z_N[idxx,idxy] = sum
+    L1_error =  np.abs(Z_N - FEM.solution_function(X,Y))
     #MSE = (np.square(np.array(result)-np.array(analitical))).mean()
     #print(f"MSE: {MSE}")
     #return MSE
-    plt.contourf(X, Y, Z_N,levels=20)
+    plt.contourf(X, Y, L1_error,levels=20)
     #plt.axis('equal')
     #highlight_level = 0.0
     #plt.contour(X, Y, Z, levels=[highlight_level], colors='red')
     plt.colorbar()
-    plt.title('Solution of the PDE')
+    plt.title('Error Heatmap')
     plt.grid(True)
     plt.show()
 def plotResultHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain = True,N=150):

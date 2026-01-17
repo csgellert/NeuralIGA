@@ -16,13 +16,13 @@ from network_defs import load_test_model
 
 #model = load_test_model("SIREN_circle", "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 30.0})
 model = Geomertry.AnaliticalDistanceCircle()
-DIVISIONS = 100
+DIVISIONS = 95
 ORDER = 1
 DELTA = 0.005
 
 
 #defining geometry:
-default = mesh.getDefaultValues(div=DIVISIONS,order=ORDER,delta=DELTA,larger_domain=FEM.LARGER_DOMAIN)
+default = mesh.getDefaultValues(div=DIVISIONS,order=ORDER,delta=DELTA)
 x0, y0,x1,y1,xDivision,yDivision,p,q = default
 knotvector_u, knotvector_w,weigths, ctrlpts = mesh.generateRectangularMesh(*default)
 assert p==q and xDivision == yDivision

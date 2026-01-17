@@ -446,13 +446,16 @@ def load_test_model(name, type, params = {}):
         model = model.double()  # Convert to float64
         model.eval()
         return model
-        model = Siren(architecture=architecture, outermost_linear=True)
-    elif name == "ReLU":
-        raise NotImplementedError("No pretrained ReLU model available.")
-        model = NeuralNetwork(architecture=[2, 256, 256, 256, 256, 1])
-    elif name == "PE_ReLU":
+    elif type == "ReLU":
+        architecture = params.get("architecture", [2, 256, 256, 256, 256, 1])
+        model = NeuralNetwork(architecture=architecture)
+        model.load_state_dict(torch.load(f"trained_models/{name}.pth", map_location=torch.device('cpu'), weights_only=True))
+        model = model.double()  # Convert to float64
+        model.eval()
+        return model
+    elif type == "PE_ReLU":
         raise NotImplementedError("No pretrained PE_ReLU model available.")
         model = SIRELU(architecture=[2, 256, 256, 256, 256, 1], outermost_linear=True)
     else:
-        raise ValueError(f"Unknown model name: {name}")
+        raise ValueError(f"Unknown model type: {type}")
     return model

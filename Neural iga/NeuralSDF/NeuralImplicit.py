@@ -162,7 +162,43 @@ def generate_standard_boundary_points(num_boundary_points, fun_num=0, device=Non
     
     else:
         raise NotImplementedError(f"Boundary point generation not implemented for fun_num={fun_num}")
-   
+def get_standard_SDF_gradient(points, fun_num=0, device=None, data_gen_params={}):
+    """
+    Compute the gradient of the SDF for standard geometries.
+    
+    Args:
+        points: tensor of shape (N, 2) - input points
+        fun_num: function type (0=circle, 1=star, 4=L-shape, 5=line)
+        device: torch device for computation
+        data_gen_params: dict with additional parameters
+    """
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    points = points.to(device)
+    points.requires_grad_(True)
+    
+    if fun_num == 0:  # circle
+        sdf_values = 1 - torch.sqrt(points[:, 0]**2 + points[:, 1]**2)
+    elif fun_num == 1:  # star shape
+        sdf_values = SDF.distance_from_star_contour_vectorized(points, device=device)
+    elif fun_num == 4:  # L-shape
+        sdf_values = SDF.distance_from_L_shape_vectorized(points, device=device)
+    elif fun_num == 5:  # infinite line
+        angle = data_gen_params.get('angle', 0.0)
+        offset = data_gen_params.get('offset', 0.0)
+        sdf_values = SDF.distance_from_line_vectorized(points, angle=angle, offset=offset, device=device)
+    else:
+        raise NotImplementedError(f"SDF gradient not implemented for fun_num={fun_num}")
+    
+    gradients = torch.autograd.grad(outputs=sdf_values,
+                                    inputs=points,
+                                    grad_outputs=torch.ones_like(sdf_values),
+                                    create_graph=True,
+                                    retain_graph=True,
+                                    only_inputs=True)[0]
+    
+    return gradients
 
 def generate_bspline_data(num_samples, case=1, device=None, data_gen_params={}, gt_num_curve_samples=1000, use_refinement = False):
     if device is None:
@@ -316,38 +352,27 @@ def evaluate_bspline_data_gen(grid, case=1, device=None, data_gen_params={}, gt_
         return y.view(-1, 1)
     else:
         raise NotImplementedError
-def train_models(model_list, num_epochs = 100, batch_size=10000, fun_num=1, device=None, crt = nn.L1Loss(),create_error_history = False):
-    if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    criterion = crt
-    if create_error_history:
-        crt_L1 = nn.L1Loss()
-        crt_L2 = nn.MSELoss()
-        crt_Linf = lambda output, target: torch.max(torch.abs(output - target))
-    report_interval = max(1, num_epochs // 10)
-    for epoch in range(num_epochs):
-        # Generate training data
-        #pts, target = generate_bspline_data(batch_size, case=fun_num, device=device)
-        pts, target = generate_data(batch_size, fun_num=fun_num, device=device) 
-        for model in model_list:
-            model.to(device)
-            pred = model(pts)
-            loss = criterion(pred, target)
-            model.optimizer.zero_grad()
-            loss.backward()
-            model.optimizer.step()
-            model.loss_history.append(loss.item())      
-            if create_error_history:
-                with torch.no_grad():
-                    L1_error = crt_L1(pred, target).item()
-                    L2_error = torch.sqrt(crt_L2(pred, target)).item()
-                    Linf_error = crt_Linf(pred, target).item()
-                    model.error_history["L1"].append(L1_error)
-                    model.error_history["L2"].append(L2_error)
-                    model.error_history["Linf"].append(Linf_error)  
-        if (epoch + 1) % report_interval == 0 or epoch == 0:
-            print(f"Epoch [{epoch}], Losses: " + 
-                  ", ".join([f"{model.name}: {model.loss_history[-1]:.6f}" for model in model_list]))
+
+def get_gradient_error(model, grds_gt, pts,metric='L1'):
+    pts.requires_grad_(True)
+    pred = model(pts)
+    grads = torch.autograd.grad(outputs=pred, inputs=pts,
+                                grad_outputs=torch.ones_like(pred),
+                                create_graph=True, retain_graph=True)[0]
+    # cosine similarity of grads between gt ang model predictions
+    cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+    similarity = cos(grads, grds_gt)
+    similarity_error = 1-similarity
+    lengths = torch.norm(grads, dim=1)
+    if metric == 'L1':
+        mean_similarity = torch.mean(torch.abs(similarity_error)).item()
+        length_error = torch.mean(torch.abs(lengths - 1)).item()
+    elif metric == 'L_inf':
+        mean_similarity = torch.max(similarity_error).item()
+        length_error = torch.max(torch.abs(lengths - 1)).item()
+    else:
+        raise NotImplementedError(f"Metric {metric} not implemented")
+    return length_error, mean_similarity
 
 def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun_num=1, *, device=None,
                               crt = nn.L1Loss(),
@@ -358,7 +383,8 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                               create_weight_distribution_history = False, hytory_after_epochs = 100, error_distribution_resolution=50,
                               create_SDF_history = False, gt_num_curve_samples = 1000,
                               use_importance_sampling = False, importance_sampling_params = {}, importance_sampling_coeff = 0.0,
-                              use_refinement = False):
+                              use_refinement = False,
+                              grad_on_bnd_coeff = 0.0, eikon_near_bnd = False):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')   
     criterion = crt
@@ -368,8 +394,6 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
         crt_Linf = lambda output, target: torch.max(torch.abs(output - target))
     report_interval = max(1, num_epochs // 10)
     for epoch in range(num_epochs):
-        # Generate training data
-        #pts, target = generate_bspline_data(batch_size, case=fun_num, device=device)
         if data_gen_mode == 'standard':
             pts, target = generate_data(batch_size, fun_num=fun_num, device=device, data_gen_params=data_gen_params) 
         elif data_gen_mode == 'bspline':
@@ -395,6 +419,8 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                 current_importance_sampling_coeff = importance_sampling_coeff
             if isinstance(importance_sampling_params, (list, tuple)):
                 current_importance_sampling_params = importance_sampling_params[idx]
+            if isinstance(grad_on_bnd_coeff, (list, tuple)):
+                current_grad_on_bnd_coeff = grad_on_bnd_coeff[idx]
             else:
                 current_importance_sampling_params = importance_sampling_params
 
@@ -405,7 +431,19 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                 grads = torch.autograd.grad(outputs=pred_eik, inputs=pts,
                                             grad_outputs=torch.ones_like(pred_eik),
                                             create_graph=True, retain_graph=True)[0]
-                eikonal_term = ((grads.norm(dim=1) - 1) ** 2).mean()
+                eikonal_term = criterion(grads.norm(dim=1), torch.ones_like(pred_eik))
+                
+                if eikon_near_bnd:  
+                    if data_gen_mode == 'bspline': raise NotImplementedError("Eikonal near boundary not implemented for bspline data generation.")
+                    near_bndr_pts, _ = generate_standard_boundary_points(num_boundary_points=batch_size, fun_num=fun_num, device=device, data_gen_params=data_gen_params, use_importance_sampling=True, importance_sampling_params={'sigma':0.05})
+                    near_bndr_pts.requires_grad_(True)
+                    near_bndr_pred_eik = model(near_bndr_pts)
+                    near_bndr_grads = torch.autograd.grad(outputs=near_bndr_pred_eik, inputs=near_bndr_pts,
+                                                          grad_outputs=torch.ones_like(near_bndr_pred_eik),
+                                                          create_graph=True, retain_graph=True)[0]
+                    near_bndr_eikonal_term = criterion(near_bndr_grads.norm(dim=1), torch.ones_like(near_bndr_pred_eik))
+                eikonal_term = eikonal_term  + (near_bndr_eikonal_term if eikon_near_bnd else 0.0)
+                eikonal_term = eikonal_term / (1.0  + float(eikon_near_bnd))
                 loss += current_eikon_coeff * eikonal_term
             if current_boundry_coeff > 0.0:
                 # Generating boundary points based on data generation mode
@@ -413,7 +451,17 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                     bndr_pts = generate_bspline_boundary_points(num_boundary_points=batch_size, case=fun_num, device=device, data_gen_params=data_gen_params)
                 else:
                     bndr_pts = generate_standard_boundary_points(num_boundary_points=batch_size, fun_num=fun_num, device=device, data_gen_params=data_gen_params)
+                if current_grad_on_bnd_coeff > 0.0:
+                    bndr_pts.requires_grad_(True)
                 bndr_pred = model(bndr_pts)
+                if current_grad_on_bnd_coeff > 0.0:
+                    bndr_grads = torch.autograd.grad(outputs=bndr_pred, inputs=bndr_pts,
+                                                    grad_outputs=torch.ones_like(bndr_pred),
+                                                    create_graph=True, retain_graph=True)[0]
+                    if data_gen_mode == 'bspline': raise NotImplementedError("Gradient on boundary not implemented for bspline data generation.")
+                    target_grads = get_standard_SDF_gradient(bndr_pts, fun_num=fun_num, device=device, data_gen_params=data_gen_params)
+                    boundary_grad_term = criterion(bndr_grads, target_grads)
+                    loss += current_grad_on_bnd_coeff * boundary_grad_term
                 boundary_term = (bndr_pred ** 2).mean()
                 loss += current_boundry_coeff * boundary_term
             if xi_coeff > 0.0:

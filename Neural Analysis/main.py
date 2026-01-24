@@ -16,8 +16,8 @@ from network_defs import load_test_model
 
 #model = load_test_model("SIREN_circle", "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 30.0})
 model = Geomertry.AnaliticalDistanceCircle()
-DIVISIONS = 95
-ORDER = 1
+DIVISIONS = 20
+ORDER = 2
 DELTA = 0.005
 
 

@@ -11,6 +11,8 @@ import FEM
 import mesh
 import Geomertry
 from network_defs import load_test_model
+import FEM_WEB
+import evaluation_WEB
 
 
 def save_simulation_results(filename, mdl_name, test_values, orders, all_eval_stats, 
@@ -60,13 +62,11 @@ def save_simulation_results(filename, mdl_name, test_values, orders, all_eval_st
     print(f"Results saved to {filename}")
 
 
-mdl_name = "SIREN_circle_1_4" #! check network params!!
-model = load_test_model(mdl_name, type="SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 8.0, "w_hidden": 8.0})
-#mdl_name = "AnalyticalDistanceCircleTanh"
-#model = Geomertry.AnaliticalDistanceCircle()
-FEM.FUNCTION_CASE = 3
-FEM.MAX_SUBDIVISION = 4
-mesh.TRANSFORM = None
+#mdl_name = "SIREN_circle_1_4" #! check network params!!
+#model = load_test_model(mdl_name, type="SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 8.0, "w_hidden": 8.0})
+mdl_name = "AnalyticalDistanceCircleWEB"
+model = Geomertry.AnaliticalDistanceCircle()
+USE_WEB = True
 
 test_values = [10, 20, 50, 80, 100]
 orders = [1, 2, 3]
@@ -94,13 +94,25 @@ for order in orders:
         
         K = np.zeros(((xDivision+p+1)*(yDivision+q+1),(xDivision+p+1)*(yDivision+q+1)))
         F = np.zeros((xDivision+p+1)*(yDivision+q+1))
-        K, F, etype = FEM.processAllElements(model, p, q, knotvector_u, knotvector_w, xDivision, yDivision, K, F)
+        if USE_WEB:
+            # Assemble and solve with WEB-splines
+            K, F, etype, bsp_class, ext_basis = FEM_WEB.processAllElementsWEB(
+                model, p, q, knotvector_u, knotvector_w, xDivision, yDivision
+            )
+            u = FEM_WEB.solveWEB(K, F)
 
-        result = FEM.solveWeak(K,F)
 
-        eval_stats = evaluation.evaluateAccuracy(model, result, p, q, knotvector_u, knotvector_w, N=10000, seed=42)
-        accuracy.append(eval_stats["MAE"])
-        evaluation.printErrorMetrics(eval_stats)
+            eval_stats = evaluation_WEB.evaluateAccuracyWEB(
+                model, u, p, q, knotvector_u, knotvector_w, bsp_class, ext_basis, N=10000, seed=42)
+            evaluation_WEB.printErrorMetricsWEB(eval_stats)
+        else:
+            K, F, etype = FEM.processAllElements(model, p, q, knotvector_u, knotvector_w, xDivision, yDivision, K, F)
+
+            result = FEM.solveWeak(K,F)
+
+            eval_stats = evaluation.evaluateAccuracy(model, result, p, q, knotvector_u, knotvector_w, N=10000, seed=42)
+            accuracy.append(eval_stats["MAE"])
+            evaluation.printErrorMetrics(eval_stats)
         
         # Store results for this configuration
         all_eval_stats[(order, division)] = eval_stats
@@ -113,5 +125,5 @@ save_simulation_results(
     orders=orders,
     all_eval_stats=all_eval_stats,
     function_case=FEM.FUNCTION_CASE,
-    max_subdivision=FEM.MAX_SUBDIVISION
+    max_subdivision=FEM.MAX_SUBDIVISION,
 )

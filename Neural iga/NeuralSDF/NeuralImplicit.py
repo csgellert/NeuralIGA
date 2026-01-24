@@ -176,14 +176,34 @@ def get_standard_SDF_gradient(points, fun_num=0, device=None, data_gen_params={}
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     points = points.to(device)
-    points.requires_grad_(True)
     
     if fun_num == 0:  # circle
+        points.requires_grad_(True)
         sdf_values = 1 - torch.sqrt(points[:, 0]**2 + points[:, 1]**2)
     elif fun_num == 1:  # star shape
+        raise NotImplementedError("SDF gradient not implemented for star shape")
         sdf_values = SDF.distance_from_star_contour_vectorized(points, device=device)
     elif fun_num == 4:  # L-shape
-        sdf_values = SDF.distance_from_L_shape_vectorized(points, device=device)
+        closest_point, dist = SDF.get_closest_cntr_point_L_shape_vectorized(points)
+        # where dist is zero the gradient shows inside the shape, so we need to handle that
+
+        gradients = torch.zeros_like(points)
+        torch_mask = dist.squeeze() == 0
+        horiz_mask_up = torch_mask & (points[:,1] == -1)
+        horiz_mask_down = torch_mask & ((points[:,1] == 1) | ((points[:,1] == 0) & (points[:,0] > 0)))
+        vert_mask_right = torch_mask & (points[:,0] == -1)
+        vert_mask_left = torch_mask & ((points[:,0] == 0) | ((points[:,0] == 1) & (points[:,1] > 0)))
+        diff = points - closest_point 
+        dist_safe = torch.where(dist.unsqueeze(1) == 0, torch.ones_like(dist.unsqueeze(1)), dist.unsqueeze(1))  # to avoid division by zero
+        grads = diff / dist_safe
+
+        gradients[~torch_mask] = grads[~torch_mask]
+        gradients[horiz_mask_up, :] = torch.tensor([0.0, 1.0], device=device)
+        gradients[horiz_mask_down, :] = torch.tensor([0.0, -1.0], device=device)
+        gradients[vert_mask_right, :] = torch.tensor([1.0, 0.0], device=device)
+        gradients[vert_mask_left, :] = torch.tensor([-1.0, 0.0], device=device)
+        return gradients
+
     elif fun_num == 5:  # infinite line
         angle = data_gen_params.get('angle', 0.0)
         offset = data_gen_params.get('offset', 0.0)
@@ -360,7 +380,7 @@ def get_gradient_error(model, grds_gt, pts,metric='L1'):
                                 grad_outputs=torch.ones_like(pred),
                                 create_graph=True, retain_graph=True)[0]
     # cosine similarity of grads between gt ang model predictions
-    cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+    cos = nn.CosineSimilarity(dim=1, eps=1e-16)
     similarity = cos(grads, grds_gt)
     similarity_error = 1-similarity
     lengths = torch.norm(grads, dim=1)
@@ -460,9 +480,14 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                                                     create_graph=True, retain_graph=True)[0]
                     if data_gen_mode == 'bspline': raise NotImplementedError("Gradient on boundary not implemented for bspline data generation.")
                     target_grads = get_standard_SDF_gradient(bndr_pts, fun_num=fun_num, device=device, data_gen_params=data_gen_params)
+                    # error v2
+                    #cos_sim = nn.CosineSimilarity(dim=1, eps=1e-6)(bndr_grads, target_grads)
+                    #angle_error = torch.mean(1 - cos_sim)
+                    #eikon_errror = torch.mean(torch.abs(bndr_grads.norm(dim=1) - 1))
+                    #loss += current_grad_on_bnd_coeff * (angle_error + eikon_errror)
                     boundary_grad_term = criterion(bndr_grads, target_grads)
                     loss += current_grad_on_bnd_coeff * boundary_grad_term
-                boundary_term = (bndr_pred ** 2).mean()
+                boundary_term = criterion(bndr_pred, torch.zeros_like(bndr_pred))
                 loss += current_boundry_coeff * boundary_term
             if xi_coeff > 0.0:
                 xi_term = torch.exp(-100 * torch.abs(pred)).mean()

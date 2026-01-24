@@ -319,6 +319,57 @@ def distance_from_L_shape_vectorized(coords, device=None):
     
     return signed_distances
 
+def get_closest_cntr_point_L_shape_vectorized(pts):
+    """
+    Get the closest point on the L-shape contour to the point (x, y).
+    L-shape fills domain [-1, 1] with lower corner at (-1, -1).
+
+    Args:
+        pts: tensor of shape (num_points, 2) - [x, y] coordinates
+    Returns:
+        Tensor of shape (num_points, 2) - closest points on the L-shape contour
+    """
+    corners = torch.tensor([(-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (1.0, 0.0), (0.0, 0.0), (0.0, 1.0)], device=pts.device)
+    line_starts = corners
+    line_ends = torch.roll(corners, shifts=-1, dims=0)  # Next corner for each corner
+
+    num_points = pts.shape[0]
+    num_segments = line_starts.shape[0]
+
+    # Expand dimensions for broadcasting
+    pts_expanded = pts.unsqueeze(1)  # (num_points, 1, 2)
+    line_starts_expanded = line_starts.unsqueeze(0)  # (1, num_segments, 2)
+    line_ends_expanded = line_ends.unsqueeze(0)  # (1, num_segments, 2)
+
+    # Calculate line vectors
+    line_vecs = line_ends_expanded - line_starts_expanded  # (1, num_segments, 2)
+
+    # Calculate vectors from line starts to points
+    point_vecs = pts_expanded - line_starts_expanded  # (num_points, num_segments, 2)
+
+    # Calculate line lengths squared
+    line_length_sq = torch.sum(line_vecs ** 2, dim=2)  # (1, num_segments)
+
+    # Handle zero-length segments
+    line_length_sq = torch.clamp(line_length_sq, min=1e-10)
+
+    # Calculate projection parameter t
+    dot_product = torch.sum(point_vecs * line_vecs, dim=2)  # (num_points, num_segments)
+    t = torch.clamp(dot_product / line_length_sq, min=0.0, max=1.0)  # (num_points, num_segments)
+
+    # Calculate projection points
+    t_expanded = t.unsqueeze(2)  # (num_points, num_segments, 1)
+    projections = line_starts_expanded + t_expanded * line_vecs  # (num_points, num_segments, 2)
+
+    # Calculate distances
+    distances = torch.norm(pts_expanded - projections, dim=2)  # (num_points, num_segments)
+
+    # Find closest segment for each point
+    min_distances, min_indices = torch.min(distances, dim=1)  # (num_points,)
+    closest_points = projections[torch.arange(num_points), min_indices]
+
+    return closest_points, min_distances
+
 def distance_point_to_line(px, py, x1, y1, x2, y2):
     """Calculate the perpendicular distance from point (px, py) to the line segment (x1, y1) -> (x2, y2)."""
     line_length_sq = (x2 - x1) ** 2 + (y2 - y1) ** 2

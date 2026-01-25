@@ -386,9 +386,15 @@ def visualizeBasisFunctionSupportsInPhysicalDomain(
         return u_vals, b_vals
     
     # --- Create figure with multiple panels ---
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
+    fig = plt.figure(figsize=(20, 6))
+    gs = fig.add_gridspec(1, 4, width_ratios=[1.0, 1.0, 1.1, 1.2])
     
-    # Panel 1: Physical domain with support regions
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax_phys = fig.add_subplot(gs[0, 1])
+    ax2 = fig.add_subplot(gs[0, 2])
+    ax3 = fig.add_subplot(gs[0, 3])
+    
+    # Panel 1: Parametric support regions
     ax1.set_title(f"Basis function supports in parametric domain\n(Top {top_k} by contribution)")
     
     # Draw support regions for top contributions in parametric (u,v) space
@@ -422,13 +428,94 @@ def visualizeBasisFunctionSupportsInPhysicalDomain(
                                 label=f"i={inner_idx} (c={contribution:.2e})")
             ax1.add_patch(rect)
     
+    # Mark the intersection of active basis supports in parametric space
+    # This approximately shows where the point (x,y) maps to in parametric coordinates
+    if len(active_inner_pairs) > 0:
+        u_min_all = float(knotvector_x[0])
+        u_max_all = float(knotvector_x[-1])
+        v_min_all = float(knotvector_y[0])
+        v_max_all = float(knotvector_y[-1])
+        
+        for i_idx, j_idx in active_inner_pairs:
+            sup_x = _get_parametric_support(i_idx, p, knotvector_x)
+            sup_y = _get_parametric_support(j_idx, q, knotvector_y)
+            if sup_x and sup_y:
+                u_min_all = max(u_min_all, sup_x[0])
+                u_max_all = min(u_max_all, sup_x[1])
+                v_min_all = max(v_min_all, sup_y[0])
+                v_max_all = min(v_max_all, sup_y[1])
+        
+        
+    # Mark the overlap region with a star
+    ax1.scatter([x], [y], s=10, marker='+', c='red', edgecolors='darkred', 
+                    linewidths=1, label=f'Point ({x:.3g}, {y:.3g}) in parametric space', zorder=15)
+    
     ax1.set_xlabel("u (parametric x)")
     ax1.set_ylabel("v (parametric y)")
     ax1.legend(loc='best', fontsize=7, ncol=2)
     ax1.grid(True, alpha=0.2)
     ax1.set_aspect('equal', adjustable='box')
     
-    # Panel 2: Extension coefficients table
+    # Panel 2: Physical domain with boundary contour
+    ax_phys.set_title("Physical domain with boundary and basis grid")
+    
+    # Evaluate distance function on a grid
+    marg = 0.1
+    x_grid = np.linspace(FEM.DOMAIN["x1"] - marg, FEM.DOMAIN["x2"] + marg, 80)
+    y_grid = np.linspace(FEM.DOMAIN["y1"] - marg, FEM.DOMAIN["y2"] + marg, 80)
+    X_grid, Y_grid = np.meshgrid(x_grid, y_grid)
+    D_grid = np.zeros_like(X_grid)
+    
+    for i in range(len(x_grid)):
+        for j in range(len(y_grid)):
+            d_val = model(torch.tensor([[x_grid[i], y_grid[j]]], dtype=TORCH_DTYPE)).item()
+            D_grid[j, i] = d_val
+    
+    # Plot distance field as background
+    im_phys = ax_phys.contourf(X_grid, Y_grid, D_grid, levels=15, cmap='RdYlBu_r', alpha=0.6)
+    plt.colorbar(im_phys, ax=ax_phys, label='d(x,y)')
+    
+    # Overlay boundary (d=0)
+    cs = ax_phys.contour(X_grid, Y_grid, D_grid, levels=[0.0], colors='black', linewidths=2)
+    ax_phys.clabel(cs, inline=True, fontsize=8)
+    
+    # Overlay basis function grid (knot lines in parametric space)
+    # Get unique knot values (remove duplicates from clamped knots)
+    unique_knots_x = np.unique(np.asarray(knotvector_x))
+    unique_knots_y = np.unique(np.asarray(knotvector_y))
+    
+    # Draw vertical lines for x knots
+    for u_knot in unique_knots_x:
+        ax_phys.axvline(float(u_knot), color='gray', linestyle=':', alpha=0.3, linewidth=0.5)
+    
+    # Draw horizontal lines for y knots
+    for v_knot in unique_knots_y:
+        ax_phys.axhline(float(v_knot), color='gray', linestyle=':', alpha=0.3, linewidth=0.5)
+    
+    # Mark evaluation point
+    ax_phys.scatter([x], [y], s=400, marker='*', c='red', edgecolors='white', linewidths=2.5, 
+                    label=f'Point ({x:.3g}, {y:.3g})', zorder=15)
+    ax_phys.scatter([x], [y], s=80, marker='+', c='darkred', linewidths=2.5, zorder=16)
+    
+    # Mark active basis locations in physical space (sample points)
+    for pair in active_inner_pairs[:5]:  # Show a few for clarity
+        # Map parametric index to approximate physical location
+        i, j = pair
+        sup_x = _get_parametric_support(i, p, knotvector_x)
+        sup_y = _get_parametric_support(j, q, knotvector_y)
+        if sup_x and sup_y:
+            u_mid = 0.5 * (sup_x[0] + sup_x[1])
+            v_mid = 0.5 * (sup_y[0] + sup_y[1])
+            ax_phys.scatter([u_mid], [v_mid], s=80, marker='o', c='blue', alpha=0.6, 
+                           edgecolors='darkblue', linewidths=1)
+    
+    ax_phys.set_xlabel("x")
+    ax_phys.set_ylabel("y")
+    ax_phys.legend(loc='best', fontsize=8)
+    ax_phys.grid(True, alpha=0.2)
+    ax_phys.set_aspect('equal', adjustable='box')
+    
+    # Panel 3: Extension coefficients table
     ax2.axis('tight')
     ax2.axis('off')
     ax2.set_title("Extension coefficients e_{j,i} for active bases", pad=20)
@@ -485,7 +572,7 @@ def visualizeBasisFunctionSupportsInPhysicalDomain(
         f"WEB Basis Function Supports at (x={x:.6g}, y={y:.6g}) | Active inner: {len(active_inner_pairs)}, outer: {len(active_outer_pairs)}",
         fontsize=12, weight='bold', y=0.98
     )
-    plt.subplots_adjust(left=0.05, right=0.98, top=0.92, bottom=0.05, wspace=0.3)
+    plt.subplots_adjust(left=0.04, right=0.98, top=0.92, bottom=0.05, wspace=0.35)
     plt.show()
     
     # Print text summary

@@ -11,6 +11,7 @@ For immersed geometries, uses a hybrid approach:
 """
 
 import numpy as np
+from typing import Optional
 
 def _lagrange_coefficient_1d(i, j, alpha, p):
     """
@@ -58,15 +59,37 @@ def _distance_point_to_index_block_inf(j_x, j_y, alpha_x, alpha_y, p, q):
     return max(dx, dy), dx, dy
 
 
-def _block_is_fully_inner(alpha_x, alpha_y, p, q, inner_set):
-    for i_x in range(alpha_x, alpha_x + p + 1):
-        for i_y in range(alpha_y, alpha_y + q + 1):
-            if (i_x, i_y) not in inner_set:
+def _basis_support_fully_inner(i_x, i_y, p, q, element_inner_set, max_elem_x, max_elem_y):
+    """Check if the full tensor-product support of basis (i_x,i_y) lies inside Ω.
+
+    Requires that every element (elemx,elemy) with elemx∈[i_x, i_x+p], elemy∈[i_y, i_y+q]
+    is an inner element.
+    """
+    ex_start = i_x
+    ex_end = min(i_x + p, max_elem_x)
+    ey_start = i_y
+    ey_end = min(i_y + q, max_elem_y)
+    for ex in range(ex_start, ex_end + 1):
+        for ey in range(ey_start, ey_end + 1):
+            if (ex, ey) not in element_inner_set:
                 return False
     return True
 
 
-def _find_closest_inner_block_start_2d(j_x, j_y, p, q, n_basis_x, n_basis_y, inner_set, max_radius=50):
+def _block_support_is_fully_inner(alpha_x, alpha_y, p, q, element_inner_set, max_elem_x, max_elem_y):
+    """Check if every basis in the (p+1)x(q+1) block has full support inside Ω."""
+    for i_x in range(alpha_x, alpha_x + p + 1):
+        for i_y in range(alpha_y, alpha_y + q + 1):
+            if not _basis_support_fully_inner(i_x, i_y, p, q, element_inner_set, max_elem_x, max_elem_y):
+                return False
+    return True
+
+
+def _find_closest_inner_block_start_2d(j_x, j_y, p, q, n_basis_x, n_basis_y,
+                                       element_inner_set,
+                                       max_elem_x,
+                                       max_elem_y,
+                                       max_radius=50):
     """Find (alpha_x, alpha_y) so that the full (p+1)x(q+1) block is in I.
 
     Theorem 2.1 / Eq. (9) assumes the closest index array I(j) is a full
@@ -98,7 +121,7 @@ def _find_closest_inner_block_start_2d(j_x, j_y, p, q, n_basis_x, n_basis_y, inn
 
         for alpha_x in range(ax_min, ax_max + 1):
             for alpha_y in range(ay_min, ay_max + 1):
-                if not _block_is_fully_inner(alpha_x, alpha_y, p, q, inner_set):
+                if not _block_support_is_fully_inner(alpha_x, alpha_y, p, q, element_inner_set, max_elem_x, max_elem_y):
                     continue
                 d_inf, dx, dy = _distance_point_to_index_block_inf(j_x, j_y, alpha_x, alpha_y, p, q)
                 key = (d_inf, dx + dy, abs(alpha_x - base_ax) + abs(alpha_y - base_ay))
@@ -129,6 +152,9 @@ def computeExtensionCoefficientsHollig(
     knotvector_y=None,
     use_ls_fit: bool = False,
     strict: bool = False,
+    element_types: Optional[dict] = None,
+    xDivision: Optional[int] = None,
+    yDivision: Optional[int] = None,
 ):
     """
     Compute extension coefficients for outer B-splines.
@@ -161,6 +187,18 @@ def computeExtensionCoefficientsHollig(
     n_basis_x = bspline_classification['n_basis_x']
     n_basis_y = bspline_classification['n_basis_y']
 
+    # Build inner element set for strict block support checks
+    if element_types is None:
+        element_inner_set = set()
+    else:
+        element_inner_set = {(ex, ey) for ex, ey, *_ in element_types.get('inner', [])}
+    if xDivision is None or yDivision is None:
+        max_elem_x = n_basis_x - 1 + p  # conservative upper bound
+        max_elem_y = n_basis_y - 1 + q
+    else:
+        max_elem_x = p + xDivision
+        max_elem_y = q + yDivision
+
     extension_coeffs = {}
     n_with_hollig = 0
     n_with_fallback = 0
@@ -177,7 +215,9 @@ def computeExtensionCoefficientsHollig(
             q,
             n_basis_x,
             n_basis_y,
-            inner_set,
+            element_inner_set,
+            max_elem_x,
+            max_elem_y,
         )
         if alpha_pair is None:
             alpha_x = None
@@ -191,8 +231,11 @@ def computeExtensionCoefficientsHollig(
             for i_x in range(alpha_x, alpha_x + p + 1):
                 for i_y in range(alpha_y, alpha_y + q + 1):
                     inner_idx = (i_x, i_y)
-                    # By construction this should hold, but keep it safe.
+                    # Require that the basis belongs to the reduced inner set
+                    # AND its full support lies inside Ω.
                     if inner_idx not in inner_set:
+                        continue
+                    if not _basis_support_fully_inner(i_x, i_y, p, q, element_inner_set, max_elem_x, max_elem_y):
                         continue
 
                     e_x = _lagrange_coefficient_1d(i_x, j_x, alpha_x, p)

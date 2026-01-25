@@ -91,45 +91,68 @@ def distance_point_to_line(px, py, x1, y1, x2, y2):
     proj_y = y1 + t * (y2 - y1)
     return math.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
 def torch_distance_point_to_line(px, py, x1, y1, x2, y2):
-        line_length_sq = (x2 - x1) ** 2 + (y2 - y1) ** 2
-        if line_length_sq == 0:
-            return torch.sqrt((px - x1) ** 2 + (py - y1) ** 2)
-        t = torch.clamp(((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / line_length_sq, 0.0, 1.0)
-        proj_x = x1 + t * (x2 - x1)
-        proj_y = y1 + t * (y2 - y1)
-        return torch.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2)
-def l_shape_distance(crd):
-    """
-    Calculates the signed distance from a point to the contour of an L-shaped domain.
-    Negative inside, positive outside.
-    """
-    x = crd[..., 0]
-    y = crd[..., 1]
-    # Define the L-shape with larger coordinates
-    # The boundary consists of the segments connecting these corners
-    corners = [
-        (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (1.0, 0.0),
-        (0.0, 0.0), (0.0, 1.0), (-1.0, 1.0)
-    ]
-    # Compute distance to each segment
-    dists = [
-        torch_distance_point_to_line(x, y, corners[i][0], corners[i][1], corners[i+1][0], corners[i+1][1])
-        for i in range(len(corners)-1)
-    ]
-    dist = torch.min(torch.stack(dists), dim=0).values
+   line_length_sq = (x2 - x1) ** 2 + (y2 - y1) ** 2
+   eps = torch.finfo(px.dtype).eps
 
-    # Inside test: inside if in [-1,1]x[-1,0] or [-1,0]x[0,1]
-    inside_rect1 = (x >= -1) & (x <= 1) & (y >= -1) & (y <= 0)
-    inside_rect2 = (x >= -1) & (x <= 0) & (y > 0) & (y <= 1)
-    inside = inside_rect1 | inside_rect2
-    sign = - torch.where(inside, -1.0, 1.0)
-    # Ensure sign is on the same device and dtype as dist
-    sign = sign.to(dist.dtype).to(dist.device)
-    return dist * sign
+   if line_length_sq == 0:
+      return torch.sqrt((px - x1) ** 2 + (py - y1) ** 2 + eps)
+
+   t = torch.clamp(
+      ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / line_length_sq,
+      0.0,
+      1.0,
+   )
+   proj_x = x1 + t * (x2 - x1)
+   proj_y = y1 + t * (y2 - y1)
+   return torch.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2 + eps)
+
+
+def l_shape_distance(crd):
+   """Signed distance to the L-shaped domain boundary.
+
+   Negative inside, positive outside.
+   """
+   x = crd[..., 0]
+   y = crd[..., 1]
+
+   corners = [
+      (-1.0, 1.0),
+      (-1.0, -1.0),
+      (1.0, -1.0),
+      (1.0, 0.0),
+      (0.0, 0.0),
+      (0.0, 1.0),
+      (-1.0, 1.0),
+   ]
+
+   dists = [
+      torch_distance_point_to_line(
+         x,
+         y,
+         corners[i][0],
+         corners[i][1],
+         corners[i + 1][0],
+         corners[i + 1][1],
+      )
+      for i in range(len(corners) - 1)
+   ]
+   dist = torch.min(torch.stack(dists), dim=0).values
+
+   inside_rect1 = (x >= -1) & (x <= 1) & (y >= -1) & (y <= 0)
+   inside_rect2 = (x >= -1) & (x <= 0) & (y > 0) & (y <= 1)
+   inside = inside_rect1 | inside_rect2
+   sign = -torch.where(inside, -1.0, 1.0)
+   sign = sign.to(dist.dtype).to(dist.device)
+   return dist * sign
+
+
 def dist_to_circle(crd):
-      x = crd[..., 0]
-      y = crd[..., 1]
-      return 1 - torch.sqrt(x ** 2 + y ** 2)
+   x = crd[..., 0]
+   y = crd[..., 1]
+   # Use a safe norm to avoid undefined gradient at (0,0) when using autograd.
+   # This prevents NaNs in dx/dy during Gauss quadrature for p=3 (Gauss points include 0).
+   eps = torch.finfo(x.dtype).eps
+   return 1 - torch.sqrt(x**2 + y**2 + eps)
 
 def dist_to_circle_derivative(crd):
     x = crd[0]
@@ -141,8 +164,10 @@ def dist_to_circle_derivative(crd):
 class AnaliticalDistanceCircle(nn.Module):
    def __init__(self):
       super().__init__()
+
    def forward(self, crd):
       return dist_to_circle(crd)
+
    def create_contour_plot(self, resolution=100):
       x = np.linspace(0, 1, resolution)
       y = np.linspace(0, 1, resolution)

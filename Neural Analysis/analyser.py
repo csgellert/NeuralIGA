@@ -66,9 +66,13 @@ def save_simulation_results(filename, mdl_name, test_values, orders, all_eval_st
 #model = load_test_model(mdl_name, type="SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 8.0, "w_hidden": 8.0})
 mdl_name = "AnalyticalDistanceCircleWEB"
 model = Geomertry.AnaliticalDistanceCircle()
-USE_WEB = True
+USE_WEB = False
+WEB_ADAPTIVE = True
+DIAG_TRSH = 1e-9
+assert not (USE_WEB and WEB_ADAPTIVE), "USE_WEB and WEB_ADAPTIVE are mutually exclusive"
 
-test_values = [10, 20, 50, 80, 100]
+
+test_values = [10, 20, 50, 80, 100, 120]
 orders = [1, 2, 3]
 
 esize = [1/(nd+1) for nd in test_values]
@@ -105,6 +109,31 @@ for order in orders:
             eval_stats = evaluation_WEB.evaluateAccuracyWEB(
                 model, u, p, q, knotvector_u, knotvector_w, bsp_class, ext_basis, N=10000, seed=42)
             evaluation_WEB.printErrorMetricsWEB(eval_stats)
+        elif WEB_ADAPTIVE:
+            print("Assembling using standard weighted B-splines")
+            K, F, etype = FEM.processAllElements(model, p, q, knotvector_u, knotvector_w,
+                                        xDivision, yDivision, K, F)
+            print("Applying selective diagonal-based extraction (partial WEB transform)")
+            K, F, etype, diag_meta, E_tilde = FEM_WEB.transformStandardSystemToWEBSelectiveDiagonalExtraction(
+                K,
+                F,
+                model,
+                p,
+                q,
+                knotvector_u,
+                knotvector_w,
+                xDivision,
+                yDivision,
+                diag_threshold=DIAG_TRSH,
+                diag_nonzero_eps=0.0,
+                extension_strict=True,
+            )
+            print("Solving using selective diagonal-based extraction")
+            result = FEM_WEB.solveWEB(K,F)
+            print("Transforming solution back to standard B-spline basis")
+            results_v2 = E_tilde.T @ result
+            eval_stats = evaluation.evaluateAccuracy(model, results_v2, p, q, knotvector_u, knotvector_w, N=10000, seed=42)
+            evaluation.printErrorMetrics(eval_stats)  # Pretty print all metrics
         else:
             K, F, etype = FEM.processAllElements(model, p, q, knotvector_u, knotvector_w, xDivision, yDivision, K, F)
 

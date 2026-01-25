@@ -254,11 +254,12 @@ if __name__ == "__main__":
     from Geomertry import AnaliticalDistanceCircle, AnaliticalDistanceLshape
 
     print("Loading geometry model...")
-    model = AnaliticalDistanceLshape()
+    model = AnaliticalDistanceCircle()
+
 
     print("Setting up mesh...")
-    DIVISIONS = 8
-    ORDER = 1
+    DIVISIONS = 20
+    ORDER = 2
     DELTA = 0.005
 
     default = mesh.getDefaultValues(div=DIVISIONS, order=ORDER, delta=DELTA)

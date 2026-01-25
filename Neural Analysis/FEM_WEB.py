@@ -710,6 +710,9 @@ def processAllElementsWEB(
         q,
         debug=False,
         strict=True,
+        element_types=element_types,
+        xDivision=xDivision,
+        yDivision=yDivision,
     )
     n_extended = sum(1 for v in extension_coeffs.values() if len(v) > 0)
     print(f"      Extended {n_extended} outer B-splines")
@@ -759,6 +762,279 @@ def processAllElementsWEB(
 
 
 # =============================================================================
+# MATRIX TRANSFORMATION (Eq. 8.9)
+# =============================================================================
+
+def transformStandardSystemToWEB(
+    K_full,
+    F_full,
+    model,
+    p,
+    q,
+    knotvector_x,
+    knotvector_y,
+    xDivision,
+    yDivision,
+    extension_strict: bool = True,
+    web_use_weight_normalization: bool = True,
+    web_ref_weight_eps: float = 1e-10,
+):
+    """
+    Apply the Höllig coupling-matrix transform (Eq. 8.9) to a standard
+    weighted B-spline system assembled on the full basis.
+
+    This keeps the numerical integration and assembly identical to the
+    standard weighted B-spline code, then builds the WEB reduced system via
+    	ilde{E} so that \hat{G} = \tilde{E} G \tilde{E}^T and \hat{F} = \tilde{E} F.
+    """
+    n_basis_x = len(knotvector_x) - p - 1
+    n_basis_y = len(knotvector_y) - q - 1
+    n_total_expected = n_basis_x * n_basis_y
+
+    K_full = np.asarray(K_full, dtype=NP_DTYPE)
+    F_full = np.asarray(F_full, dtype=NP_DTYPE)
+
+    if K_full.shape != (n_total_expected, n_total_expected):
+        raise ValueError(
+            f"K_full has shape {K_full.shape}, expected {(n_total_expected, n_total_expected)} based on knot vectors and degrees."
+        )
+    if F_full.shape[0] != n_total_expected:
+        raise ValueError(
+            f"F_full has length {F_full.shape[0]}, expected {n_total_expected} based on knot vectors and degrees."
+        )
+
+    # Step 1: element and B-spline classification (same as WEB path)
+    element_types = classifyAllElementsWEB(model, p, q, knotvector_x, knotvector_y, xDivision, yDivision)
+    etype = {
+        "inner": len(element_types["inner"]),
+        "outer": len(element_types["outer"]),
+        "boundary": len(element_types["boundary"]),
+    }
+
+    bspline_classification = classifyBsplinesHollig(
+        element_types, p, q, knotvector_x, knotvector_y, xDivision, yDivision
+    )
+
+    # Optional WEB normalization term 1 / w(x_i)
+    bspline_classification['web_use_weight_normalization'] = bool(web_use_weight_normalization)
+    ref_weights = None
+    if web_use_weight_normalization:
+        ref_weights, ref_points = _compute_inner_reference_weights_from_inner_elements(
+            model,
+            bspline_classification,
+            element_types,
+            p,
+            q,
+            eps=web_ref_weight_eps,
+        )
+        bspline_classification['inner_reference_weights'] = ref_weights
+        bspline_classification['inner_reference_points'] = ref_points
+
+    # Step 2: compute extension coefficients and extended basis
+    extension_coeffs = computeExtensionCoefficientsHollig(
+        bspline_classification,
+        p,
+        q,
+        debug=False,
+        strict=extension_strict,
+        element_types=element_types,
+        xDivision=xDivision,
+        yDivision=yDivision,
+    )
+    extended_basis = buildExtendedBasis(bspline_classification, extension_coeffs)
+
+    # Step 3: build coupling matrix \tilde{E}
+    n_inner = bspline_classification['n_inner']
+    inner_to_reduced_idx = bspline_classification['inner_to_reduced_idx']
+    E_tilde = np.zeros((n_inner, n_total_expected), dtype=NP_DTYPE)
+
+    for inner_idx in bspline_classification['inner']:
+        row = inner_to_reduced_idx[inner_idx]
+        col = inner_idx[0] * n_basis_y + inner_idx[1]
+        diag_scale = 1.0
+        if ref_weights is not None:
+            diag_scale = 1.0 / ref_weights[inner_idx]
+        E_tilde[row, col] = diag_scale
+
+    for outer_idx, coeffs in extension_coeffs.items():
+        col = outer_idx[0] * n_basis_y + outer_idx[1]
+        for inner_idx, coeff in coeffs.items():
+            row = inner_to_reduced_idx.get(inner_idx)
+            if row is not None:
+                E_tilde[row, col] = coeff
+
+    # Step 4: transform system
+    K_reduced = E_tilde @ K_full @ E_tilde.T
+    F_reduced = E_tilde @ F_full
+
+    return K_reduced, F_reduced, etype, bspline_classification, extended_basis, E_tilde
+
+
+def transformStandardSystemToWEBSelectiveDiagonalExtraction(
+    K_full,
+    F_full,
+    model,
+    p,
+    q,
+    knotvector_x,
+    knotvector_y,
+    xDivision,
+    yDivision,
+    diag_threshold: float = 1e-10,
+    diag_nonzero_eps: float = 0.0,
+    extension_strict: bool = True,
+    print_max: int = 25,
+):
+    """Selective coupling-matrix transform based on the stiffness diagonal.
+
+    Compared to :func:`transformStandardSystemToWEB`, this only *extracts* (extends)
+    those outer B-splines whose main diagonal entry |K[j,j]| is small-but-nonzero.
+
+    - Outer B-splines with |K[j,j]| >= diag_threshold are kept as independent DOFs.
+    - Outer B-splines with 0 < |K[j,j]| < diag_threshold are extracted via Höllig
+      extension coefficients (same mechanism as WEB).
+    - If 0 < |K[j,j]| < diag_threshold for an *inner* B-spline, it is kept (not
+      extended) and reported to the user.
+
+    Returns:
+        (K_reduced, F_reduced, etype, meta, E_tilde)
+
+    where meta contains reduced-basis bookkeeping.
+    """
+    n_basis_x = len(knotvector_x) - p - 1
+    n_basis_y = len(knotvector_y) - q - 1
+    n_total_expected = n_basis_x * n_basis_y
+
+    K_full = np.asarray(K_full, dtype=NP_DTYPE)
+    F_full = np.asarray(F_full, dtype=NP_DTYPE)
+
+    if K_full.shape != (n_total_expected, n_total_expected):
+        raise ValueError(
+            f"K_full has shape {K_full.shape}, expected {(n_total_expected, n_total_expected)} based on knot vectors and degrees."
+        )
+    if F_full.shape[0] != n_total_expected:
+        raise ValueError(
+            f"F_full has length {F_full.shape[0]}, expected {n_total_expected} based on knot vectors and degrees."
+        )
+
+    if diag_threshold <= 0:
+        raise ValueError("diag_threshold must be > 0")
+    if diag_nonzero_eps < 0:
+        raise ValueError("diag_nonzero_eps must be >= 0")
+
+    # Step 1: element and B-spline classification
+    element_types = classifyAllElementsWEB(model, p, q, knotvector_x, knotvector_y, xDivision, yDivision)
+    etype = {
+        "inner": len(element_types["inner"]),
+        "outer": len(element_types["outer"]),
+        "boundary": len(element_types["boundary"]),
+    }
+
+    bspline_classification = classifyBsplinesHollig(
+        element_types, p, q, knotvector_x, knotvector_y, xDivision, yDivision
+    )
+    inner_set = set(bspline_classification["inner"])
+    outer_set = set(bspline_classification["outer"])
+    print(f"Total B-splines: {n_total_expected}, Inner: {len(inner_set)}, Outer: {len(outer_set)}")
+
+    # Step 2: decide which outer B-splines to extract based on K diagonal
+    diag = np.diag(K_full)
+    abs_diag = np.abs(diag)
+    small_nonzero_mask = (abs_diag < diag_threshold) & (abs_diag > diag_nonzero_eps)
+
+    extracted_outer = set()
+    kept_outer = set()
+    small_inner = []
+    small_other = []
+
+    for col in np.where(small_nonzero_mask)[0]:
+        idx = (int(col // n_basis_y), int(col % n_basis_y))
+        if idx in outer_set:
+            extracted_outer.add(idx)
+        elif idx in inner_set:
+            small_inner.append((idx, float(diag[col])))
+        else:
+            small_other.append((idx, float(diag[col])))
+
+    kept_outer = outer_set - extracted_outer
+
+    if small_inner:
+        print("*** NOTE: small-but-nonzero diagonal entries detected for INNER B-splines (kept as-is):")
+        for (idx, val) in small_inner[: max(0, int(print_max))]:
+            print(f"    inner {idx}: K_jj = {val:.3e}")
+        if len(small_inner) > print_max:
+            print(f"    ... and {len(small_inner) - print_max} more")
+
+    if small_other:
+        print("*** NOTE: small-but-nonzero diagonal entries for NON-inner/non-outer indices (ignored):")
+        for (idx, val) in small_other[: max(0, int(print_max))]:
+            print(f"    idx {idx}: K_jj = {val:.3e}")
+        if len(small_other) > print_max:
+            print(f"    ... and {len(small_other) - print_max} more")
+
+    print(
+        f"Selective extraction: extracting {len(extracted_outer)}/{len(outer_set)} outer B-splines "
+        f"with |K_jj| < {diag_threshold:g} (and > {diag_nonzero_eps:g}); keeping {len(kept_outer)} outer DOFs."
+    )
+
+    # Step 3: compute extension coefficients only for extracted outer set
+    if len(extracted_outer) > 0:
+        bspline_classification_sel = dict(bspline_classification)
+        bspline_classification_sel["outer"] = list(extracted_outer)
+        extension_coeffs = computeExtensionCoefficientsHollig(
+            bspline_classification_sel,
+            p,
+            q,
+            debug=False,
+            strict=extension_strict,
+            element_types=element_types,
+            xDivision=xDivision,
+            yDivision=yDivision,
+        )
+    else:
+        extension_coeffs = {}
+
+    # Step 4: build coupling matrix for a mixed reduced basis
+    reduced_basis = list(bspline_classification["inner"]) + sorted(kept_outer)
+    reduced_to_row = {idx: r for r, idx in enumerate(reduced_basis)}
+    n_reduced = len(reduced_basis)
+
+    E_tilde = np.zeros((n_reduced, n_total_expected), dtype=NP_DTYPE)
+
+    # identity rows for kept dofs
+    for idx in reduced_basis:
+        col = idx[0] * n_basis_y + idx[1]
+        row = reduced_to_row[idx]
+        E_tilde[row, col] = 1.0
+
+    # overwrite extracted outer columns by their inner combinations
+    for outer_idx, coeffs in extension_coeffs.items():
+        col = outer_idx[0] * n_basis_y + outer_idx[1]
+        # zero out the identity entry if it exists (it shouldn't for extracted outers)
+        E_tilde[:, col] = 0.0
+        for inner_idx, coeff in coeffs.items():
+            row = reduced_to_row.get(inner_idx)
+            if row is not None:
+                E_tilde[row, col] = float(coeff)
+
+    # Step 5: transform system
+    K_reduced = E_tilde @ K_full @ E_tilde.T
+    F_reduced = E_tilde @ F_full
+
+    meta = {
+        "reduced_basis": reduced_basis,
+        "reduced_to_row": reduced_to_row,
+        "inner_basis": list(bspline_classification["inner"]),
+        "kept_outer_basis": sorted(kept_outer),
+        "extracted_outer_basis": sorted(extracted_outer),
+        "diag_threshold": float(diag_threshold),
+        "diag_nonzero_eps": float(diag_nonzero_eps),
+    }
+
+    return K_reduced, F_reduced, etype, meta, E_tilde
+
+
+# =============================================================================
 # SOLVER
 # =============================================================================
 
@@ -787,8 +1063,9 @@ def solveWEB(K, F):
     
     # Report condition number
     try:
-        cond = np.linalg.cond(K_solve)
-        print(f"Condition number: {cond:.2e}")
+        pass
+        #cond = np.linalg.cond(K_solve)
+        #print(f"Condition number: {cond:.2e}")
     except:
         pass
     

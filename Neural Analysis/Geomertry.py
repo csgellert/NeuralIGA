@@ -200,6 +200,26 @@ class AnaliticalDistanceLshape(nn.Module):
       plt.title('Contour plot of distance function')
       plt.show()
 
+class AnaliticalDistanceCircle_smooth(nn.Module):
+   def __init__(self):
+      super().__init__()
+
+   def forward(self, crd):
+      return 1-crd[...,0]**2 - crd[...,1]**2
+
+   def create_contour_plot(self, resolution=100):
+      x = np.linspace(0, 1, resolution)
+      y = np.linspace(0, 1, resolution)
+      X, Y = np.meshgrid(x, y)
+      crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+      with torch.no_grad():
+         Z = self.forward(crd).cpu().numpy()
+      plt.contourf(X, Y, Z, levels=50, cmap='viridis')
+      plt.colorbar(label='Distance')
+      plt.xlabel('x')
+      plt.ylabel('y')
+      plt.title('Contour plot of distance function')
+      plt.show()
 if __name__ == "__main__":
    analitical_model2 = AnaliticalDistanceLshape()
    model = analitical_model2

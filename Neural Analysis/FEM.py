@@ -12,9 +12,9 @@ torch.set_default_dtype(torch.float64)
 NP_DTYPE = np.float64
 TORCH_DTYPE = torch.float64
 
-FUNCTION_CASE = 3
+FUNCTION_CASE = 5
 MAX_SUBDIVISION = 4
-assert FUNCTION_CASE != 1
+#assert FUNCTION_CASE != 1
 # Pre-compute Gauss quadrature data to avoid repeated calculations
 _GAUSS_CACHE = {}
 DOMAIN = {"x1": -1, "x2": 1, "y1": -1, "y2": 1}
@@ -95,7 +95,7 @@ def load_function_vectorized(x, y):
 def dirichletBoundary_vectorized(x, y):
     """Vectorized version of dirichletBoundary"""
     if FUNCTION_CASE == 1:
-        return np.full_like(x, 2)
+        return np.full_like(x, 0)
     if FUNCTION_CASE == 2:
         return np.zeros_like(x)
     if FUNCTION_CASE == 3:
@@ -146,7 +146,7 @@ def solution_function(x,y):
     elif FUNCTION_CASE == 4:
         return x*(x**2 + y**2 -1) + x +2*y
     elif FUNCTION_CASE == 5: #L-shape
-        return math.sin(2*math.pi*x)*math.sin(2*math.pi*y)
+        return np.sin(2*np.pi*x)*np.sin(2*np.pi*y)
     elif FUNCTION_CASE == 7: #double circle
         return math.sin(math.pi*(x**2 + y**2))
     else: raise NotImplementedError
@@ -163,7 +163,7 @@ def solution_function_derivative_x(x,y):
         raise NotImplementedError
         return 3*x**2 + y**2 -1 +1
     elif FUNCTION_CASE == 5: #L-shape
-        return 2*math.pi*math.cos(2*math.pi*x)*math.sin(2*math.pi*y)
+        return 2*np.pi*np.cos(2*np.pi*x)*np.sin(2*np.pi*y)
     elif FUNCTION_CASE ==7: #double circle
         raise NotImplementedError
         arg = (x**2 + y**2)*math.pi
@@ -182,7 +182,7 @@ def solution_function_derivative_y(x,y):
         raise NotImplementedError
         return 2*x*y +2
     elif FUNCTION_CASE == 5: #L-shape
-        return 2*math.pi*math.sin(2*math.pi*x)*math.cos(2*math.pi*y)
+        return 2*np.pi*np.sin(2*np.pi*x)*np.cos(2*np.pi*y)
     elif FUNCTION_CASE ==7: #double circle
         raise NotImplementedError
         arg = (x**2 + y**2)*math.pi

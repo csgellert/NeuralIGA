@@ -27,6 +27,7 @@ import time
 from typing import Callable, Tuple, Dict, Optional, Union
 import torch
 
+
 # Use float64 for better numerical accuracy
 NP_DTYPE = np.float64
 TORCH_DTYPE = torch.float64
@@ -43,134 +44,19 @@ TORCH_DTYPE = torch.float64
 #   7: u = sin(pi*(x^2+y^2)), f = complex (double circle domain)
 #   0: u = exp(w) - 1 (default WEB-spline example, works for any domain)
 
-FUNCTION_CASE = 3  # Default: use exp(w)-1 exact solution
+#FUNCTION_CASE = 3  # Default: use exp(w)-1 exact solution
 
 
 # =============================================================================
 # TEST FUNCTIONS (compatible with FEM.py)
 # =============================================================================
 
-def load_function(x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """Right-hand side f(x,y) for -Laplace(u) = f."""
-    x = np.asarray(x, dtype=NP_DTYPE)
-    y = np.asarray(y, dtype=NP_DTYPE)
-    
-    if FUNCTION_CASE == 0:
-        # Will be set dynamically based on weight function
-        raise ValueError("FUNCTION_CASE 0 requires using run_example with domain parameter")
-    elif FUNCTION_CASE == 1:
-        return -8 * x
-    elif FUNCTION_CASE == 2:
-        arg = (x ** 2 + y ** 2) * np.pi / 2
-        return -(-2 * np.pi * np.sin(arg) - np.cos(arg) * (x ** 2 + y ** 2) * np.pi ** 2)
-    elif FUNCTION_CASE == 3:
-        return -8 * x
-    elif FUNCTION_CASE == 4:
-        return -8 * x
-    elif FUNCTION_CASE == 5:  # L-shape
-        return 8 * np.pi ** 2 * np.sin(2 * np.pi * x) * np.sin(2 * np.pi * y)
-    elif FUNCTION_CASE == 7:  # double circle
-        arg = (x ** 2 + y ** 2) * np.pi
-        return 4 * np.pi * np.cos(arg) - 4 * np.pi * arg * np.sin(arg)
-    else:
-        raise NotImplementedError(f"FUNCTION_CASE {FUNCTION_CASE} not implemented")
-
-
-def solution_function(x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """Exact solution u(x,y)."""
-    x = np.asarray(x, dtype=NP_DTYPE)
-    y = np.asarray(y, dtype=NP_DTYPE)
-    
-    if FUNCTION_CASE == 0:
-        raise ValueError("FUNCTION_CASE 0 requires using run_example with domain parameter")
-    elif FUNCTION_CASE == 1:
-        return x * (x ** 2 + y ** 2 - 1)
-    elif FUNCTION_CASE == 2:
-        return np.cos((x ** 2 + y ** 2) * np.pi / 2)
-    elif FUNCTION_CASE == 3:
-        return x * (x ** 2 + y ** 2 - 1) + 2
-    elif FUNCTION_CASE == 4:
-        return x * (x ** 2 + y ** 2 - 1) + x + 2 * y
-    elif FUNCTION_CASE == 5:  # L-shape
-        return np.sin(2 * np.pi * x) * np.sin(2 * np.pi * y)
-    elif FUNCTION_CASE == 7:  # double circle
-        return np.sin(np.pi * (x ** 2 + y ** 2))
-    else:
-        raise NotImplementedError(f"FUNCTION_CASE {FUNCTION_CASE} not implemented")
-
-
-def solution_function_derivative_x(x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """Derivative of exact solution du/dx."""
-    x = np.asarray(x, dtype=NP_DTYPE)
-    y = np.asarray(y, dtype=NP_DTYPE)
-    
-    if FUNCTION_CASE == 0:
-        raise ValueError("FUNCTION_CASE 0 requires using run_example with domain parameter")
-    elif FUNCTION_CASE == 1:
-        return 3 * x ** 2 + y ** 2 - 1
-    elif FUNCTION_CASE == 2:
-        arg = (x ** 2 + y ** 2) * np.pi / 2
-        return -np.pi * x * np.sin(arg)
-    elif FUNCTION_CASE == 3:
-        return 3 * x ** 2 + y ** 2 - 1
-    elif FUNCTION_CASE == 4:
-        return 3 * x ** 2 + y ** 2 - 1 + 1
-    elif FUNCTION_CASE == 5:  # L-shape
-        return 2 * np.pi * np.cos(2 * np.pi * x) * np.sin(2 * np.pi * y)
-    elif FUNCTION_CASE == 7:  # double circle
-        arg = (x ** 2 + y ** 2) * np.pi
-        return 2 * np.pi * x * np.cos(arg)
-    else:
-        raise NotImplementedError(f"FUNCTION_CASE {FUNCTION_CASE} not implemented")
-
-
-def solution_function_derivative_y(x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """Derivative of exact solution du/dy."""
-    x = np.asarray(x, dtype=NP_DTYPE)
-    y = np.asarray(y, dtype=NP_DTYPE)
-    
-    if FUNCTION_CASE == 0:
-        raise ValueError("FUNCTION_CASE 0 requires using run_example with domain parameter")
-    elif FUNCTION_CASE == 1:
-        return 2 * x * y
-    elif FUNCTION_CASE == 2:
-        arg = (x ** 2 + y ** 2) * np.pi / 2
-        return -np.pi * y * np.sin(arg)
-    elif FUNCTION_CASE == 3:
-        return 2 * x * y
-    elif FUNCTION_CASE == 4:
-        return 2 * x * y + 2
-    elif FUNCTION_CASE == 5:  # L-shape
-        return 2 * np.pi * np.sin(2 * np.pi * x) * np.cos(2 * np.pi * y)
-    elif FUNCTION_CASE == 7:  # double circle
-        arg = (x ** 2 + y ** 2) * np.pi
-        return 2 * np.pi * y * np.cos(arg)
-    else:
-        raise NotImplementedError(f"FUNCTION_CASE {FUNCTION_CASE} not implemented")
-
-
-def dirichlet_boundary(x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """Dirichlet boundary value (for non-homogeneous BC)."""
-    x = np.asarray(x, dtype=NP_DTYPE)
-    y = np.asarray(y, dtype=NP_DTYPE)
-    
-    if FUNCTION_CASE == 0:
-        return np.zeros_like(x)
-    elif FUNCTION_CASE == 1:
-        return np.full_like(x, 2.0)
-    elif FUNCTION_CASE == 2:
-        return np.zeros_like(x)
-    elif FUNCTION_CASE == 3:
-        return np.full_like(x, 2.0)
-    elif FUNCTION_CASE == 4:
-        return x + 2 * y
-    elif FUNCTION_CASE == 5:
-        return np.zeros_like(x)
-    elif FUNCTION_CASE == 7:
-        return np.zeros_like(x)
-    else:
-        raise NotImplementedError(f"FUNCTION_CASE {FUNCTION_CASE} not implemented")
-
+from FEM import load_function_vectorized as load_function
+from FEM import solution_function as solution_function
+from FEM import solution_function_derivative_x as solution_function_derivative_x
+from FEM import solution_function_derivative_y as solution_function_derivative_y
+from FEM import dirichletBoundary_vectorized as dirichletBoundary
+from FEM import FUNCTION_CASE
 
 # =============================================================================
 # B-SPLINE EVALUATION FUNCTIONS
@@ -453,7 +339,8 @@ class NeuralWeightFunction(WeightFunction):
     The SDF is scaled/shifted to define w(x,y) > 0 inside the domain.
     """
     
-    def __init__(self, model: torch.nn.Module, domain: Dict[str, float] = None):
+    def __init__(self, model: torch.nn.Module, domain: Dict[str, float] = None, 
+                 transform: Optional[str] = None, tang: float = 1.0):
         """
         Parameters:
         -----------
@@ -463,9 +350,16 @@ class NeuralWeightFunction(WeightFunction):
             Physical domain bounds {'x1': ..., 'x2': ..., 'y1': ..., 'y2': ...}
             Points in [0,1]^2 are mapped to this domain for model evaluation.
             If None, assumes model works on [0,1]^2 directly.
+        transform : str, optional
+            Transform to apply to SDF output: 'sigmoid', 'tanh', 'logarithmic', 
+            'exponential', 'trapezoid', or None (no transform)
+        tang : float
+            Tangent parameter for trapezoid transform (default: 1.0)
         """
         self.model = model
         self.domain = domain
+        self.transform = transform
+        self.tang = tang
         self.model.eval()
         
         # Try to get device from model
@@ -506,6 +400,88 @@ class NeuralWeightFunction(WeightFunction):
         """
         return self._transform_coords(np.asarray(x, dtype=NP_DTYPE), 
                                        np.asarray(y, dtype=NP_DTYPE))
+    
+    def _apply_transform(self, w_tensor: torch.Tensor, wx_tensor: torch.Tensor, 
+                        wy_tensor: torch.Tensor, wxx_tensor: torch.Tensor, 
+                        wyy_tensor: torch.Tensor) -> Tuple[torch.Tensor, ...]:
+        """
+        Apply transformation to SDF and its derivatives using chain rule.
+        
+        For a transform g(w), we have:
+        - w_new = g(w)
+        - wx_new = g'(w) * wx
+        - wy_new = g'(w) * wy
+        - wxx_new = g''(w) * wx^2 + g'(w) * wxx
+        - wyy_new = g''(w) * wy^2 + g'(w) * wyy
+        """
+        if self.transform is None:
+            return w_tensor, wx_tensor, wy_tensor, wxx_tensor, wyy_tensor
+        
+        if self.transform == 'sigmoid':
+            # g(w) = 1 / (1 + exp(-w))
+            # g'(w) = g(w) * (1 - g(w))
+            # g''(w) = g'(w) * (1 - 2*g(w))
+            exp_neg_w = torch.exp(-w_tensor)
+            g_w = 1.0 / (1.0 + exp_neg_w)
+            g_prime = g_w * (1.0 - g_w)
+            g_double_prime = g_prime * (1.0 - 2.0 * g_w)
+            
+            w_new = g_w
+            wx_new = g_prime * wx_tensor
+            wy_new = g_prime * wy_tensor
+            wxx_new = g_double_prime * wx_tensor ** 2 + g_prime * wxx_tensor
+            wyy_new = g_double_prime * wy_tensor ** 2 + g_prime * wyy_tensor
+            
+        elif self.transform == 'tanh':
+            # g(w) = tanh(w)
+            # g'(w) = 1 - tanh^2(w) = sech^2(w)
+            # g''(w) = -2 * tanh(w) * sech^2(w)
+            g_w = torch.tanh(w_tensor)
+            g_prime = 1.0 - g_w ** 2
+            g_double_prime = -2.0 * g_w * g_prime
+            
+            w_new = g_w
+            wx_new = g_prime * wx_tensor
+            wy_new = g_prime * wy_tensor
+            wxx_new = g_double_prime * wx_tensor ** 2 + g_prime * wxx_tensor
+            wyy_new = g_double_prime * wy_tensor ** 2 + g_prime * wyy_tensor
+            
+        elif self.transform == 'logarithmic':
+            # g(w) = log(w + 1)
+            # g'(w) = 1 / (w + 1)
+            # g''(w) = -1 / (w + 1)^2
+            w_plus_1 = w_tensor + 1.0
+            g_w = torch.log(w_plus_1)
+            g_prime = 1.0 / w_plus_1
+            g_double_prime = -1.0 / (w_plus_1 ** 2)
+            
+            w_new = g_w
+            wx_new = g_prime * wx_tensor
+            wy_new = g_prime * wy_tensor
+            wxx_new = g_double_prime * wx_tensor ** 2 + g_prime * wxx_tensor
+            wyy_new = g_double_prime * wy_tensor ** 2 + g_prime * wyy_tensor
+            
+        elif self.transform == 'trapezoid':
+            # g(w) = min(w * tang, 1)
+            # g'(w) = tang if w * tang < 1 else 0
+            # g''(w) = 0
+            mask = (w_tensor * self.tang < 1.0)
+            g_w = torch.where(mask, w_tensor * self.tang, torch.ones_like(w_tensor))
+            g_prime = torch.where(mask, torch.tensor(self.tang, dtype=TORCH_DTYPE), 
+                                 torch.zeros_like(w_tensor))
+            g_double_prime = torch.zeros_like(w_tensor)
+            
+            w_new = g_w
+            wx_new = g_prime * wx_tensor
+            wy_new = g_prime * wy_tensor
+            wxx_new = g_double_prime * wx_tensor ** 2 + g_prime * wxx_tensor
+            wyy_new = g_double_prime * wy_tensor ** 2 + g_prime * wyy_tensor
+            
+        else:
+            raise ValueError(f"Unknown transform: {self.transform}. "
+                           f"Use 'sigmoid', 'tanh', 'logarithmic', 'exponential', 'trapezoid', or None")
+        
+        return w_new, wx_new, wy_new, wxx_new, wyy_new
     
     def __call__(self, x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, ...]:
         x = np.asarray(x, dtype=NP_DTYPE)
@@ -550,6 +526,11 @@ class NeuralWeightFunction(WeightFunction):
         
         wxx_tensor = grad_wx[:, 0]
         wyy_tensor = grad_wy[:, 1]
+        
+        # Apply transformation if specified (before domain scaling)
+        w_tensor, wx_tensor, wy_tensor, wxx_tensor, wyy_tensor = self._apply_transform(
+            w_tensor, wx_tensor, wy_tensor, wxx_tensor, wyy_tensor
+        )
         
         # Convert to numpy
         w = w_tensor.detach().cpu().numpy().reshape(original_shape)

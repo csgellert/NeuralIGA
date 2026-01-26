@@ -146,6 +146,94 @@ def l_shape_distance(crd):
    return dist * sign
 
 
+def smooth_min(a, b, k=1.0):
+   """Smooth minimum using Rvachev R-functions concept.
+
+   k controls smoothness: higher k = sharper transition (harder min)
+   Returns smooth approximation to min(a,b) with continuous derivatives.
+   Note: this formulation does *not* guarantee that zero isolines are
+   preserved when one argument is exactly zero (it slightly shifts the
+   zero level by ~k/2).
+   """
+   return (a + b - torch.sqrt((a - b)**2 + k**2)) / 2.0
+
+
+def smooth_min_preserve_zero(a, b, eps=1e-12):
+   """Zero-preserving smooth minimum (Rvachev R0-type).
+
+   This keeps the property that if either input is exactly zero and the
+   other is positive, the output is zero. It is continuously differentiable
+   and better preserves the exact contour of distance fields.
+
+   Args:
+      a, b: tensors to combine
+      eps: small stabilizer to avoid sqrt(0)
+   """
+   return a + b - torch.sqrt(a * a + b * b + eps)
+
+
+def l_shape_distance_smooth(crd, k=0.1, preserve_zero_line=False):
+   """Smooth distance to L-shaped domain boundary using R-functions.
+
+   Uses smooth min operations instead of hard min to create a continuously
+   differentiable distance function. If ``preserve_zero_line`` is True the
+   zero isoline coincides with the exact contour (distance = 0 only on
+   the boundary) using a zero-preserving R-function.
+
+   Args:
+      crd: coordinates tensor with shape (..., 2)
+      k: smoothness parameter (used only when preserve_zero_line=False)
+      preserve_zero_line: if True, use zero-preserving smooth min that
+         exactly keeps the contour at distance 0
+
+   Returns:
+      Smooth signed distance. Negative inside, positive outside.
+   """
+   x = crd[..., 0]
+   y = crd[..., 1]
+
+   corners = [
+      (-1.0, 1.0),
+      (-1.0, -1.0),
+      (1.0, -1.0),
+      (1.0, 0.0),
+      (0.0, 0.0),
+      (0.0, 1.0),
+      (-1.0, 1.0),
+   ]
+
+   # Compute distances to all edges
+   dists = [
+      torch_distance_point_to_line(
+         x,
+         y,
+         corners[i][0],
+         corners[i][1],
+         corners[i + 1][0],
+         corners[i + 1][1],
+      )
+      for i in range(len(corners) - 1)
+   ]
+
+   # Use smooth min operation instead of hard min
+   # Choose zero-preserving R-function when requested
+   dist = dists[0]
+   if preserve_zero_line:
+      for d in dists[1:]:
+         dist = smooth_min_preserve_zero(dist, d)
+   else:
+      for d in dists[1:]:
+         dist = smooth_min(dist, d, k=k)
+
+   # Determine if point is inside using the same logic
+   inside_rect1 = (x >= -1) & (x <= 1) & (y >= -1) & (y <= 0)
+   inside_rect2 = (x >= -1) & (x <= 0) & (y > 0) & (y <= 1)
+   inside = inside_rect1 | inside_rect2
+   sign = -torch.where(inside, -1.0, 1.0)
+   sign = sign.to(dist.dtype).to(dist.device)
+   return dist * sign
+
+
 def dist_to_circle(crd):
    x = crd[..., 0]
    y = crd[..., 1]
@@ -199,6 +287,56 @@ class AnaliticalDistanceLshape(nn.Module):
       plt.ylabel('y')
       plt.title('Contour plot of distance function')
       plt.show()
+
+
+class AnaliticalDistanceLshape_RFunction(nn.Module):
+   """Smooth L-shape distance using Rvachev R-functions.
+   
+   This implements a smooth (continuously differentiable) distance function
+   to the L-shaped domain boundary using smooth min operations instead of
+   hard minimum. This avoids sharp corners and makes the function suitable
+   for neural IGA applications.
+   """
+   def __init__(self, smoothness=0.1, preserve_zero_line=True):
+      """
+      Args:
+         smoothness: R-function smoothness parameter k (used when
+            preserve_zero_line is False). Typical range: 0.01 - 0.5
+         preserve_zero_line: if True, uses zero-preserving R-function so
+            distance==0 exactly on the contour (recommended)
+      """
+      super().__init__()
+      self.smoothness = smoothness
+      self.preserve_zero_line = preserve_zero_line
+
+   def forward(self, crd):
+      return l_shape_distance_smooth(
+         crd,
+         k=self.smoothness,
+         preserve_zero_line=self.preserve_zero_line,
+      )
+
+   def create_contour_plot(self, resolution=100):
+      x = np.linspace(-1.01, 1.01, resolution)
+      y = np.linspace(-1.01, 1.01, resolution)
+      X, Y = np.meshgrid(x, y)
+      crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+      with torch.no_grad():
+         Z = self.forward(crd).cpu().numpy()
+      plt.contourf(X, Y, Z, levels=50, cmap='viridis')
+      plt.colorbar(label='Smooth Distance')
+      #zero contour
+      plt.contour(X, Y, Z, levels=[0], colors='k', linewidths=1)
+      plt.xlabel('x')
+      plt.ylabel('y')
+      title = 'Smooth L-shape distance'
+      if self.preserve_zero_line:
+         title += ' (zero-preserving)'
+      else:
+         title += f' (k={self.smoothness})'
+      plt.title(title)
+      plt.show()
+
 
 class AnaliticalDistanceCircle_smooth(nn.Module):
    def __init__(self):

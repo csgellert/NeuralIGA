@@ -18,12 +18,12 @@ import evaluation_WEB
 
 #model = load_test_model("SIREN_circle", "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 30.0})
 model = Geomertry.AnaliticalDistanceCircle()
-DIVISIONS = 100
-ORDER = 3
+DIVISIONS = 20
+ORDER = 2
 DELTA = 0.005
 USE_WEB =False
 USE_WEB_TRANSFORM = False
-USE_WEB_DIAG_EXTRACT = True
+USE_WEB_DIAG_EXTRACT = False
 assert sum([bool(USE_WEB), bool(USE_WEB_TRANSFORM), bool(USE_WEB_DIAG_EXTRACT)]) <= 1, \
     "USE_WEB / USE_WEB_TRANSFORM / USE_WEB_DIAG_EXTRACT are mutually exclusive"
 

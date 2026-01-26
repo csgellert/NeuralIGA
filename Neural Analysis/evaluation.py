@@ -288,75 +288,182 @@ def calculateErrorBspline(model,results,p,q,knotvector_x, knotvector_y,larger_do
     MSE = (np.square(np.array(result)-np.array(analitical))).mean()
     print(f"MSE: {MSE}")
     return MSE
-def plotErrorHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain = True,N=150):
-
-    marg = 0.1
-    x = np.linspace(FEM.DOMAIN["x1"]-marg,FEM.DOMAIN["x2"]+marg,N)
-    y = np.linspace(FEM.DOMAIN["y1"]-marg,FEM.DOMAIN["y2"]+marg,N)
-    X,Y = np.meshgrid(x,y)
-    Z_N=np.zeros((N,N))
-    for idxx,xx in enumerate(x):
-        for idxy, yy in enumerate(y):
-            sum = 0
-            d = mesh.distanceFromContur(xx,yy,model).detach().numpy()
-            
-            for xbasis in range(len(knotvector_x)-p-1):
-                for ybasis in range(len(knotvector_y)-q-1):
-                    sum += Geomertry.B(xx,p,xbasis,knotvector_x)*Geomertry.B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
-            sum = d*sum
-            #sum = 0
-            sum += (1-d)*FEM.dirichletBoundary_vectorized(xx,yy)
-            if d<0: sum = 0
-            Z_N[idxx,idxy] = sum
-    L1_error =  np.abs(Z_N - FEM.solution_function(X,Y))
-    #MSE = (np.square(np.array(result)-np.array(analitical))).mean()
-    #print(f"MSE: {MSE}")
-    #return MSE
-    plt.contourf(X, Y, L1_error,levels=20)
-    #plt.axis('equal')
-    #highlight_level = 0.0
-    #plt.contour(X, Y, Z, levels=[highlight_level], colors='red')
-    plt.colorbar()
-    plt.title('Error Heatmap')
-    plt.grid(True)
-    plt.show()
-def plotResultHeatmap(model,results,knotvector_x,knotvector_y,p,q,larger_domain = True,N=150):
-    marg = 0.05
-    x = np.linspace(FEM.DOMAIN["x1"]-marg,FEM.DOMAIN["x2"]+marg,N)
-    y = np.linspace(FEM.DOMAIN["y1"]-marg,FEM.DOMAIN["y2"]+marg,N)
-    X,Y = np.meshgrid(x,y)
-    Z_A=np.zeros((N,N))
-    Z_N=np.zeros((N,N))
-    ERR=np.zeros((N,N))
-    for idxx,xx in enumerate(x):
-        for idxy, yy in enumerate(y):
-            sum = 0
-            d = mesh.distanceFromContur(xx,yy,model)
-            Z_A[idxx,idxy] = FEM.solution_function(xx,yy) if d>=0 else 0
-            
-            for xbasis in range(len(knotvector_x)-p-1):
-                for ybasis in range(len(knotvector_y)-q-1):
-                    sum += Geomertry.B(xx,p,xbasis,knotvector_x)*Geomertry.B(yy,q,ybasis,knotvector_y)*results[(len(knotvector_x)-p-1)*xbasis+ybasis]
-            sum = d*sum
-            #sum = 0
-            sum += (1-d)*FEM.dirichletBoundary_vectorized(xx,yy)
-            if d<0: sum = 0
-            Z_N[idxx,idxy] = sum
-    #MSE = (np.square(np.array(result)-np.array(analitical))).mean()
-    #print(f"MSE: {MSE}")
-    #return MSE
-    ERR = np.abs(Z_N-Z_A)
-    plt.contourf(X, Y, Z_A,levels=20)
-    #plt.axis('equal')
-    plt.colorbar()
-    highlight_level = 0.0
-    plt.contour(X, Y, Z_A, levels=[highlight_level], colors='red') 
-
-    # Show the plot
+def plotErrorHeatmap(model, results, knotvector_x, knotvector_y, p, q, larger_domain=True, N=150):
+    """Vectorized error heatmap plotting."""
+    marg = 0.05 
+    x = np.linspace(FEM.DOMAIN["x1"] - marg, FEM.DOMAIN["x2"] + marg, N)
+    y = np.linspace(FEM.DOMAIN["y1"] - marg, FEM.DOMAIN["y2"] + marg, N)
+    X, Y = np.meshgrid(x, y)
     
-    plt.title('Solution')
-    plt.grid(True)
+    # Flatten grid for vectorized evaluation
+    x_flat = X.flatten()
+    y_flat = Y.flatten()
+    
+    # Create Bspline objects for vectorized evaluation
+    Bspxi = Bspline(knotvector_x, p)
+    Bspeta = Bspline(knotvector_y, q)
+    
+    n_basis_x = len(knotvector_x) - p - 1
+    n_basis_y = len(knotvector_y) - q - 1
+    
+    # Evaluate distances for all points at once
+    points_tensor = torch.tensor(np.column_stack([x_flat, y_flat]), dtype=TORCH_DTYPE)
+    with torch.no_grad():
+        distances = model(points_tensor).cpu().numpy().flatten()
+    
+    # Initialize result array
+    Z_N = np.zeros(len(x_flat))
+    
+    # Process all points vectorized
+    for idx in range(len(x_flat)):
+        d = distances[idx]
+        if d < 0:
+            Z_N[idx] = np.nan
+            continue
+            
+        xx, yy = x_flat[idx], y_flat[idx]
+        
+        # Evaluate B-spline basis
+        bxi = Bspxi(xx)
+        beta = Bspeta(yy)
+        
+        # Compute B-spline sum: sum(N_i * c_i)
+        bspline_sum = 0.0
+        for i in range(n_basis_x):
+            for j in range(n_basis_y):
+                coeff = results[i * n_basis_y + j]
+                N_ij = bxi[i] * beta[j]
+                bspline_sum += N_ij * coeff
+        
+        # Apply blending: u_h = d * phi + (1-d) * g
+        g = FEM.dirichletBoundary_vectorized(xx, yy)
+        Z_N[idx] = d * bspline_sum + (1 - d) * g
+    
+    # Reshape to grid
+    Z_N = Z_N.reshape(N, N)
+    
+    # Compute analytical solution
+    Z_A = FEM.solution_function(X, Y)
+    Z_A = np.where(distances.reshape(N, N) >= 0, Z_A, np.nan)
+    
+    # Compute error
+    L1_error = np.abs(Z_N - Z_A)
+    
+    # Plot
+    plt.figure(figsize=(10, 8))
+
+    plt.contourf(X, Y, L1_error, levels=20,cmap='hot')
+    plt.colorbar(label='Absolute Error')
+    plt.title('Error Heatmap')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.grid(True, alpha=0.3)
+    plt.axis('equal')
     plt.show()
+def plotResultHeatmap(model, results, knotvector_x, knotvector_y, p, q, larger_domain=True, N=150):
+    """Vectorized result heatmap plotting."""
+    marg = 0.05 
+    x = np.linspace(FEM.DOMAIN["x1"] - marg, FEM.DOMAIN["x2"] + marg, N)
+    y = np.linspace(FEM.DOMAIN["y1"] - marg, FEM.DOMAIN["y2"] + marg, N)
+    X, Y = np.meshgrid(x, y)
+    
+    # Flatten grid for vectorized evaluation
+    x_flat = X.flatten()
+    y_flat = Y.flatten()
+    
+    # Create Bspline objects for vectorized evaluation
+    Bspxi = Bspline(knotvector_x, p)
+    Bspeta = Bspline(knotvector_y, q)
+    
+    n_basis_x = len(knotvector_x) - p - 1
+    n_basis_y = len(knotvector_y) - q - 1
+    
+    # Evaluate distances for all points at once
+    points_tensor = torch.tensor(np.column_stack([x_flat, y_flat]), dtype=TORCH_DTYPE)
+    with torch.no_grad():
+        distances = model(points_tensor).cpu().numpy().flatten()
+    
+    # Initialize result arrays
+    Z_N = np.zeros(len(x_flat))
+    Z_A = np.zeros(len(x_flat))
+    
+    # Process all points
+    for idx in range(len(x_flat)):
+        d = distances[idx]
+        xx, yy = x_flat[idx], y_flat[idx]
+        
+        if d < 0:
+            Z_N[idx] = 0.0
+            Z_A[idx] = 0.0
+            continue
+        
+        # Analytical solution
+        Z_A[idx] = FEM.solution_function(xx, yy)
+        
+        # Evaluate B-spline basis
+        bxi = Bspxi(xx)
+        beta = Bspeta(yy)
+        
+        # Compute B-spline sum: sum(N_i * c_i)
+        bspline_sum = 0.0
+        for i in range(n_basis_x):
+            for j in range(n_basis_y):
+                coeff = results[i * n_basis_y + j]
+                N_ij = bxi[i] * beta[j]
+                bspline_sum += N_ij * coeff
+        
+        # Apply blending: u_h = d * phi + (1-d) * g
+        g = FEM.dirichletBoundary_vectorized(xx, yy)
+        Z_N[idx] = d * bspline_sum + (1 - d) * g
+    
+    # Reshape to grids
+    Z_N = Z_N.reshape(N, N)
+    Z_A = Z_A.reshape(N, N)
+    
+    # Create subplots for numerical, analytical, and error
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    
+    # Numerical solution
+    im1 = axes[0].contourf(X, Y, Z_N, levels=20, cmap='viridis')
+    axes[0].contour(X, Y, Z_N, levels=[0.0], colors='red', linewidths=1.5)
+    plt.colorbar(im1, ax=axes[0])
+    axes[0].set_title('Numerical Solution')
+    axes[0].set_xlabel('x')
+    axes[0].set_ylabel('y')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].axis('equal')
+    
+    # Analytical solution
+    im2 = axes[1].contourf(X, Y, Z_A, levels=20, cmap='viridis')
+    axes[1].contour(X, Y, Z_A, levels=[0.0], colors='red', linewidths=1.5)
+    plt.colorbar(im2, ax=axes[1])
+    axes[1].set_title('Analytical Solution')
+    axes[1].set_xlabel('x')
+    axes[1].set_ylabel('y')
+    axes[1].grid(True, alpha=0.3)
+    axes[1].axis('equal')
+    
+    # Error
+    ERR = np.abs(Z_N - Z_A)
+    im3 = axes[2].contourf(X, Y, ERR, levels=20, cmap='hot')
+    plt.colorbar(im3, ax=axes[2], label='Absolute Error')
+    axes[2].set_title('Absolute Error')
+    axes[2].set_xlabel('x')
+    axes[2].set_ylabel('y')
+    axes[2].grid(True, alpha=0.3)
+    axes[2].axis('equal')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Print error statistics
+    valid_mask = distances.reshape(N, N) >= 0
+    if np.any(valid_mask):
+        err_valid = ERR[valid_mask]
+        print(f"Error Statistics (inside domain):")
+        print(f"  Max Error:  {np.max(err_valid):.6e}")
+        print(f"  Mean Error: {np.mean(err_valid):.6e}")
+        print(f"  MSE:        {np.mean(err_valid**2):.6e}")
 
 
 #* TEST

@@ -10,6 +10,7 @@ profiling_stats*
 test*
 quick_benchmark.py
 experinemtiing.py
+collocation_matlab/
 # 3D data files
 *.obj
 

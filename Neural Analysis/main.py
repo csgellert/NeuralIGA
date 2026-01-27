@@ -18,10 +18,10 @@ import evaluation_WEB
 
 #model = load_test_model("SIREN_circle", "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 30.0})
 model = Geomertry.AnaliticalDistanceCircle()
-DIVISIONS = 20
-ORDER = 2
+DIVISIONS = 100
+ORDER = 3
 DELTA = 0.005
-USE_WEB =False
+USE_WEB =True
 USE_WEB_TRANSFORM = False
 USE_WEB_DIAG_EXTRACT = False
 assert sum([bool(USE_WEB), bool(USE_WEB_TRANSFORM), bool(USE_WEB_DIAG_EXTRACT)]) <= 1, \
@@ -50,7 +50,7 @@ with cProfile.Profile() as pr:
     if USE_WEB:
         print("Assembling using WEB/Höllig method")
         K, F, etype, bsp_class, ext_basis= FEM_WEB.processAllElementsWEB(model,p,q,knotvector_u,knotvector_w,
-                                              xDivision,yDivision,extension_strict=True,web_use_weight_normalization=False)
+                                              xDivision,yDivision,extension_strict=True,web_use_weight_normalization=True)
     elif USE_WEB_TRANSFORM:
         print("Assembling using standard weighted B-splines")
         K, F, etype = FEM.processAllElements(model, p, q, knotvector_u, knotvector_w, 

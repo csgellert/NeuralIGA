@@ -12,7 +12,7 @@ torch.set_default_dtype(torch.float64)
 NP_DTYPE = np.float64
 TORCH_DTYPE = torch.float64
 
-FUNCTION_CASE = 5
+FUNCTION_CASE = 1
 MAX_SUBDIVISION = 4
 #assert FUNCTION_CASE != 1
 # Pre-compute Gauss quadrature data to avoid repeated calculations

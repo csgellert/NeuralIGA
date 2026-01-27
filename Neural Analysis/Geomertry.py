@@ -257,8 +257,8 @@ class AnaliticalDistanceCircle(nn.Module):
       return dist_to_circle(crd)
 
    def create_contour_plot(self, resolution=100):
-      x = np.linspace(0, 1, resolution)
-      y = np.linspace(0, 1, resolution)
+      x = np.linspace(-1.005, 1.005, resolution)
+      y = np.linspace(-1.005, 1.005, resolution)
       X, Y = np.meshgrid(x, y)
       crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
       with torch.no_grad():
@@ -275,8 +275,8 @@ class AnaliticalDistanceLshape(nn.Module):
    def forward(self, crd):
       return l_shape_distance(crd)
    def create_contour_plot(self, resolution=100):
-      x = np.linspace(0, 1, resolution)
-      y = np.linspace(0, 1, resolution)
+      x = np.linspace(-1.005, 1.005, resolution)
+      y = np.linspace(-1.005, 1.005, resolution)
       X, Y = np.meshgrid(x, y)
       crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
       with torch.no_grad():
@@ -346,8 +346,8 @@ class AnaliticalDistanceCircle_smooth(nn.Module):
       return 1-crd[...,0]**2 - crd[...,1]**2
 
    def create_contour_plot(self, resolution=100):
-      x = np.linspace(0, 1, resolution)
-      y = np.linspace(0, 1, resolution)
+      x = np.linspace(-1.005, 1.005, resolution)
+      y = np.linspace(-1.005, 1.005, resolution)
       X, Y = np.meshgrid(x, y)
       crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
       with torch.no_grad():

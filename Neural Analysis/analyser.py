@@ -64,16 +64,16 @@ def save_simulation_results(filename, mdl_name, test_values, orders, all_eval_st
 
 #mdl_name = "SIREN_circle_1_4" #! check network params!!
 #model = load_test_model(mdl_name, type="SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 8.0, "w_hidden": 8.0})
-mdl_name = "AnalyticalDistanceL_WEB"
-#model = Geomertry.AnaliticalDistanceCircle()
-model = Geomertry.AnaliticalDistanceLshape()
+mdl_name = "AnalyticalDistance_Circle_WEB"
+model = Geomertry.AnaliticalDistanceCircle()
+#model = Geomertry.AnaliticalDistanceLshape()
 USE_WEB = True
 WEB_ADAPTIVE = False
 DIAG_TRSH = 1e-9
 assert not (USE_WEB and WEB_ADAPTIVE), "USE_WEB and WEB_ADAPTIVE are mutually exclusive"
 
 
-test_values = [10, 20, 50, 80,100,120,150]
+test_values = [10, 20, 50, 80,95,100,105,120]
 orders = [1, 2, 3]
 
 esize = [1/(nd+1) for nd in test_values]

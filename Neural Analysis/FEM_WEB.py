@@ -244,17 +244,23 @@ def buildExtendedBasis(bspline_classification, extension_coeffs):
 # LOCAL DOF SELECTION + ASSEMBLY (WEB)
 # =============================================================================
 
-def _get_local_inner_dofs(elemx, elemy, p, q, bspline_classification):
-    """Return the inner B-spline indices active on element (elemx, elemy).
+def _get_local_inner_dofs(elemx, elemy, p, q, bspline_classification, basis_to_inner):
+    """Return the WEB-reduced inner DOFs that are nonzero on this element.
+
+    NOTE: For WEB-splines, an extended basis function B_i^e can be nonzero on
+    an element even if the underlying inner tensor-product B-spline b_i is not
+    active there (because B_i^e mixes in outer splines). Therefore we determine
+    local reduced DOFs via an inverse map:
+
+        basis_to_inner[(k_x,k_y)] -> set of inner indices i such that
+                                     (k_x,k_y) appears in B_i^e.
 
     For a tensor-product B-spline basis, the active (global) indices on the
     knot span [elemx, elemx+1]×[elemy, elemy+1] are:
       i in [elemx-p, elemx], j in [elemy-q, elemy]
 
-    We then filter to the WEB reduced DOFs (inner B-splines only).
-
     Returns:
-        local_inner: list[(i,j)] inner indices active on this element
+        local_inner: list[(i,j)] inner indices active on this element (WEB sense)
         local_reduced: list[int] reduced indices corresponding to local_inner
     """
     n_basis_x = bspline_classification['n_basis_x']
@@ -266,16 +272,15 @@ def _get_local_inner_dofs(elemx, elemy, p, q, bspline_classification):
     j_start = max(elemy - q, 0)
     j_end = min(elemy, n_basis_y - 1)
 
-    local_inner = []
-    local_reduced = []
-    for i in range(i_start, i_end + 1):
-        for j in range(j_start, j_end + 1):
-            ridx = inner_to_reduced.get((i, j))
-            if ridx is None:
-                continue
-            local_inner.append((i, j))
-            local_reduced.append(ridx)
+    active_pairs = [(i, j) for i in range(i_start, i_end + 1) for j in range(j_start, j_end + 1)]
+    local_inner_set = set()
+    for pair in active_pairs:
+        inners = basis_to_inner.get(pair)
+        if inners:
+            local_inner_set.update(inners)
 
+    local_inner = sorted(local_inner_set)
+    local_reduced = [inner_to_reduced[idx] for idx in local_inner]
     return local_inner, local_reduced
 
 
@@ -547,9 +552,9 @@ def SubdivideWEB(model, x1, x2, y1, y2, p, q, knotvector_x, knotvector_y,
 # =============================================================================
 
 def elementWEB(model, p, q, knotvector_x, knotvector_y, elemx, elemy, x1, x2, y1, y2,
-               Bspxi, Bspeta, bspline_classification, extended_basis):
+               Bspxi, Bspeta, bspline_classification, extended_basis, basis_to_inner):
     """Process inner element with WEB-splines (no subdivision)."""
-    local_inner, local_reduced = _get_local_inner_dofs(elemx, elemy, p, q, bspline_classification)
+    local_inner, local_reduced = _get_local_inner_dofs(elemx, elemy, p, q, bspline_classification, basis_to_inner)
     Ke, Fe = GaussQuadratureWEB(
         model, x1, x2, y1, y2, p, q, knotvector_x, knotvector_y,
         Bspxi, Bspeta, bspline_classification, extended_basis,
@@ -559,9 +564,9 @@ def elementWEB(model, p, q, knotvector_x, knotvector_y, elemx, elemy, x1, x2, y1
 
 
 def boundaryElementWEB(model, p, q, knotvector_x, knotvector_y, elemx, elemy, x1, x2, y1, y2,
-                       Bspxi, Bspeta, bspline_classification, extended_basis):
+                       Bspxi, Bspeta, bspline_classification, extended_basis, basis_to_inner):
     """Process boundary element with WEB-splines (with subdivision)."""
-    local_inner, local_reduced = _get_local_inner_dofs(elemx, elemy, p, q, bspline_classification)
+    local_inner, local_reduced = _get_local_inner_dofs(elemx, elemy, p, q, bspline_classification, basis_to_inner)
     Ke, Fe = SubdivideWEB(
         model, x1, x2, y1, y2, p, q, knotvector_x, knotvector_y,
         Bspxi, Bspeta, bspline_classification, extended_basis,
@@ -720,6 +725,13 @@ def processAllElementsWEB(
     # Step 4: Build extended basis
     print("\n[4/4] Building extended basis...")
     extended_basis = buildExtendedBasis(bspline_classification, extension_coeffs)
+
+    # Build inverse map for correct local DOF selection:
+    #   (basis index k) -> set of inner indices i such that k appears in B_i^e
+    basis_to_inner = {}
+    for inner_idx, basis_coeffs in extended_basis.items():
+        for basis_idx in basis_coeffs.keys():
+            basis_to_inner.setdefault(basis_idx, set()).add(inner_idx)
     
     print("\n      Assembling system...")
     
@@ -739,7 +751,7 @@ def processAllElementsWEB(
             Ke, Fe, ridxs = elementWEB(
                 model, p, q, knotvector_x, knotvector_y,
                 elemx, elemy, x1, x2, y1, y2,
-                Bspxi, Bspeta, bspline_classification, extended_basis,
+                Bspxi, Bspeta, bspline_classification, extended_basis, basis_to_inner,
             )
             K, F = _assembly_web(K, F, Ke, Fe, ridxs)
             pbar.update(1)
@@ -751,7 +763,7 @@ def processAllElementsWEB(
             Ke, Fe, ridxs = boundaryElementWEB(
                 model, p, q, knotvector_x, knotvector_y,
                 elemx, elemy, x1, x2, y1, y2,
-                Bspxi, Bspeta, bspline_classification, extended_basis,
+                Bspxi, Bspeta, bspline_classification, extended_basis, basis_to_inner,
             )
             K, F = _assembly_web(K, F, Ke, Fe, ridxs)
             pbar.update(1)
@@ -861,7 +873,12 @@ def transformStandardSystemToWEB(
         for inner_idx, coeff in coeffs.items():
             row = inner_to_reduced_idx.get(inner_idx)
             if row is not None:
-                E_tilde[row, col] = coeff
+                # If WEB normalization is enabled, scale the entire row i
+                # (i.e. all coefficients contributing to φ_i) by 1 / w(x_i).
+                if ref_weights is not None:
+                    E_tilde[row, col] = (1.0 / ref_weights[inner_idx]) * coeff
+                else:
+                    E_tilde[row, col] = coeff
 
     # Step 4: transform system
     K_reduced = E_tilde @ K_full @ E_tilde.T

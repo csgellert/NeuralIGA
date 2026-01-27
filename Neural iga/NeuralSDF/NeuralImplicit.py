@@ -558,6 +558,87 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                     sdf_values = predictions.cpu().numpy().reshape(resolution, resolution)
                     model.SDF_history.append(sdf_values)
 
+def train_hotspot(model, fun_num, num_epochs=1000, batch_size=1500, device=None, crt=nn.L1Loss(),
+                 bnd_coeff=1.0,bnd_grd_coeff=1.0, hotspot_coeff=1.0,eikon_coeff = 1.0, off_srf_coeff=1.0, data_gen_params={}, hotspot_params={}, use_lr_sched = False):
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')   
+    criterion = crt
+    report_interval = max(1, num_epochs // 10)
+    for epoch in range(num_epochs):
+        # Boundary data
+        bnd = generate_standard_boundary_points(batch_size,fun_num, device=device)
+        bnd.requires_grad_(True)
+        model.to(device)
+        pred = model(bnd)
+        bnd_err = criterion(pred, torch.zeros_like(pred))
+        loss = bnd_coeff * bnd_err
+        
+        bnd_grads = torch.autograd.grad(outputs=pred, inputs=bnd,
+                                        grad_outputs=torch.ones_like(pred),
+                                        create_graph=True, retain_graph=True)[0]
+        target_grads = get_standard_SDF_gradient(bnd, fun_num=fun_num, device=device)
+        boundary_grad_term = criterion(bnd_grads, target_grads)
+        loss += bnd_grd_coeff * boundary_grad_term
+        
+        # Hotspot data
+        if hotspot_coeff > 0.0:
+            #random points in the domain
+            margain = data_gen_params.get('margain', 0.05)
+            pts = torch.rand(batch_size, 2, device=device) * (2.0+2*margain) - 1.0 - margain # Range [-1, 1]
+            pts.requires_grad_(True)
+            pred_hotspot = model(pts)
+            grad_hotspot = torch.autograd.grad(outputs=pred_hotspot, inputs=pts,
+                                              grad_outputs=torch.ones_like(pred_hotspot),
+                                              create_graph=True, retain_graph=True)[0]
+            grad_length = grad_hotspot.norm(dim=1)
+            lambda_hotspot = hotspot_params.get('lambda', 0.1)
+            L_heat = torch.mean(0.5*torch.exp(-2*lambda_hotspot*torch.abs(pred_hotspot)) *(grad_length**2 +1)) 
+            loss += hotspot_coeff * L_heat
+            eikon_loss = criterion(grad_length, torch.ones_like(pred_hotspot))
+            loss += eikon_coeff * eikon_loss
+        off_srf_punish = torch.exp(-10*torch.abs(pred_hotspot)).mean()
+        loss += off_srf_coeff * off_srf_punish
+
+        model.optimizer.zero_grad()
+        loss.backward()
+        model.optimizer.step()
+        model.loss_history.append(loss.item())  
+        if use_lr_sched and model.lr_scheduler is not None:
+            model.lr_scheduler.step()
+        if (epoch + 1) % report_interval == 0 or epoch == 0:
+            print(f"Epoch [{epoch}], Loss: {loss.item()}\t(Boundary: {bnd_err.item()}, Boundary Grad: {boundary_grad_term.item()}, Hotspot: {L_heat.item()}, eikonal: {eikon_loss.item()}, Off Surface Punish: {off_srf_punish.item()})")
+
+def R_train(model, fun_num,num_epochs=1000, batch_size=10000, device=None, crt=nn.L1Loss(),
+            data_gen_params={}, use_lr_sched = False):
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')   
+    criterion = crt
+    report_interval = max(1, num_epochs // 10)
+    for epoch in range(num_epochs):
+        bnd = generate_standard_boundary_points(batch_size, case=fun_num, device=device, data_gen_params=data_gen_params)
+        bnd.requires_grad_(True)
+        bnd_pred = model(bnd)
+        bnd_loss = criterion(bnd_pred, torch.zeros_like(bnd_pred))
+        loss += bnd_loss
+        bnd_normals = bnd_normals(bnd, fun_num=fun_num, device=device, data_gen_params=data_gen_params)
+
+        #stepssizes
+        step_size = torch.rand(batch_size, 1, device=device)
+        pts_new = bnd + step_size * bnd_normals
+        middle_pred = model(pts_new)
+        
+        #Rvachev error
+
+
+        model.optimizer.zero_grad()
+        loss.backward()
+        model.optimizer.step()
+        model.loss_history.append(loss.item())  
+        if use_lr_sched and model.lr_scheduler is not None:
+            model.lr_scheduler.step()
+        if (epoch + 1) % report_interval == 0 or epoch == 0:
+            print(f"Epoch [{epoch}], Loss: {loss.item()}")
+
 def plot_model_weight_per_layer_hyst(model):
     # Plot weight histograms for each layer in the model
     for i, layer in enumerate(model.net):

@@ -57,7 +57,7 @@ from FEM import solution_function_derivative_x as solution_function_derivative_x
 from FEM import solution_function_derivative_y as solution_function_derivative_y
 from FEM import dirichletBoundary_vectorized as dirichletBoundary
 from FEM import FUNCTION_CASE
-
+DOMAIN = {"x1": -1, "x2": 1, "y1": -1, "y2": 1}
 # =============================================================================
 # B-SPLINE EVALUATION FUNCTIONS
 # =============================================================================
@@ -1165,7 +1165,7 @@ def compute_numerical_gradient(U: np.ndarray, h: float) -> Tuple[np.ndarray, np.
     return dU_dx, dU_dy
 
 
-def run_example(n: int = 2, H: int = 20, domain: str = 'disc', 
+def run_example(model,n: int = 2, H: int = 20,
                 function_case: int = None, verbose: bool = True):
     """
     Run the collocation example.
@@ -1189,140 +1189,128 @@ def run_example(n: int = 2, H: int = 20, domain: str = 'disc',
     results : dict
         Dictionary with solution, errors, and timing information
     """
-    global FUNCTION_CASE
-    
-    # Store old value and set new one
-    old_case = FUNCTION_CASE
-    if function_case is not None:
-        FUNCTION_CASE = function_case
-    
-    try:
-        if verbose:
-            print("=" * 60)
-            print(f"WEB-Spline Collocation: degree={n}, H={H}, domain={domain}, case={FUNCTION_CASE}")
-            print("=" * 60)
+    # Case 1: u = x*(x²+y²-1) has u=0 on unit circle (homogeneous Dirichlet BC)
+
+
+    global DOMAIN
+    if verbose:
+        print("=" * 60)
+        print(f"WEB-Spline Collocation: degree={n}, H={H}, domain={DOMAIN}, case={function_case}")
+        print("=" * 60)
+
+    # Weight function - using analytical circle distance in [-1,1]² domain
+    #model = Geomertry.AnaliticalDistanceCircle()
+    #model  = Geomertry.AnaliticalDistanceLshape()
+    #model = load_test_model("SIREN_L_3_0", "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 80, "w_hidden": 120.0})
+    #model = Geomertry.AnaliticalDistanceLshape_RFunction()
+    wfct = NeuralWeightFunction(model=model, domain=DOMAIN)
+    #model.create_contour_plot(100)
+    # Create domain transformer for exact solution comparison
+    transformer = create_domain_transformer(DOMAIN)
+
+    # Precompute collocation data
+    CD = compute_collocation_data(n, J_MAX=16)
+
+    # Solve - now with domain parameter, f is automatically transformed and scaled!
+    Uxy, xB, yB, con, dim_sys, rtimes = collocation_2d(
+        n, H, wfct, 
+        f=load_function,  # Pass original function - domain transform handled internally
+        CD=CD, 
+        verbose=verbose,
+        domain=DOMAIN  # NEW: domain parameter handles coordinate transform + Laplacian scaling
+    )
+
+    if Uxy is None:
+        print("Solver failed!")
+        raise RuntimeError("Collocation solver failed.")
+
+    # Compute exact solution at grid points using transformer
+    w_grid, _, _, _, _ = wfct(xB, yB)
+    mask = w_grid > 0
+
+    # Use transformer to wrap exact solution (transforms grid -> physical coords)
+    u_exact_transformed = transformer.wrap_function(solution_function)
+    du_dx_transformed = transformer.wrap_derivative_x(solution_function_derivative_x)
+    du_dy_transformed = transformer.wrap_derivative_y(solution_function_derivative_y)
+
+    uxy_exact = np.zeros_like(Uxy)
+    uxy_exact[mask] = u_exact_transformed(xB[mask], yB[mask])
+
+    # Compute L2 and Linf errors
+    error = Uxy[mask] - uxy_exact[mask]
+    exact_vals = uxy_exact[mask]
+
+    max_exact = np.max(np.abs(exact_vals)) if np.any(exact_vals != 0) else 1.0
+    l2_exact = np.sqrt(np.sum(exact_vals ** 2)) if np.any(exact_vals != 0) else 1.0
+
+    ErrMax = np.max(np.abs(error)) / max_exact
+    ErrL2 = np.sqrt(np.sum(error ** 2)) / l2_exact
+    Err_MAE = np.mean(np.abs(error))
+    Err_L_inf = np.max(np.abs(error))
+
+    # Compute H1 semi-norm error
+    h = 1.0 / H
+    dU_dx_num, dU_dy_num = compute_numerical_gradient(Uxy, h)
+
+    dU_dx_ex = np.zeros_like(Uxy)
+    dU_dy_ex = np.zeros_like(Uxy)
+    dU_dx_ex[mask] = du_dx_transformed(xB[mask], yB[mask])
+    dU_dy_ex[mask] = du_dy_transformed(xB[mask], yB[mask])
+
+    grad_error_x = dU_dx_num[mask] - dU_dx_ex[mask]
+    grad_error_y = dU_dy_num[mask] - dU_dy_ex[mask]
+    grad_exact_norm = np.sqrt(np.sum(dU_dx_ex[mask] ** 2 + dU_dy_ex[mask] ** 2))
+
+    if grad_exact_norm > 0:
+        H1_semi = np.sqrt(np.sum(grad_error_x ** 2 + grad_error_y ** 2)) / grad_exact_norm
+    else:
+        H1_semi = np.nan
+
+    H1_error = np.sqrt(ErrL2 ** 2 + H1_semi ** 2) if not np.isnan(H1_semi) else np.nan
+
+    if verbose:
+        print("\n" + "=" * 40)
+        print("Results:")
+        print("=" * 40)
+        print(f"  Relative max error: {ErrMax:.6e}")
+        print(f"  Relative L2 error:  {ErrL2:.6e}")
+        print(f"  Mean absolute error: {Err_MAE:.6e}")
+        print(f"  Absolute L-inf error: {Err_L_inf:.6e}")
+        print(f"  H1 semi-norm error: {H1_semi:.6e}" if not np.isnan(H1_semi) else "  H1 semi-norm error: N/A")
+        print(f"  H1 error:           {H1_error:.6e}" if not np.isnan(H1_error) else "  H1 error:           N/A")
+        print(f"  Condition number:   {con:.2e}" if not np.isnan(con) else "  Condition number:   N/A")
+        print(f"  System dimension:   {dim_sys}")
+        print(f"\nTiming:")
+        print(f"  Classification/Assembly: {rtimes['sys']:.3f}s")
+        print(f"  Extension:               {rtimes['ext']:.3f}s")
+        print(f"  Solution:                {rtimes['sol']:.3f}s")
+        print(f"  Total:                   {rtimes['total']:.3f}s")
+
+    result = {
+        'Uxy': Uxy, 'xB': xB, 'yB': yB, 'uxy_exact': uxy_exact,
+        'ErrMax': ErrMax, 'ErrL2': ErrL2, 'MAE': Err_MAE,
+        'H1_semi': H1_semi, 'H1_error': H1_error,
+        'condition': con, 'dim': dim_sys, 'rtimes': rtimes,
+        'wfct': wfct, 'function_case': function_case
+    }
+    visualize_solution(result)
         
-        # Select weight function
-        if domain == 'disc':
-            wfct = DiscWeightFunction()
-        elif domain == 'shovel':
-            wfct = ShovelWeightFunction()
-        else:
-            raise ValueError(f"Unknown domain type: {domain}")
-        
-        # Select test functions based on FUNCTION_CASE
-        if FUNCTION_CASE == 0:
-            # Default: u = exp(w) - 1
-            def u_exact(x, y):
-                w, _, _, _, _ = wfct(x, y)
-                return np.exp(w) - 1
-            
-            def f_rhs(x, y):
-                w, wx, wy, wxx, wyy = wfct(x, y)
-                return -np.exp(w) * (wx ** 2 + wy ** 2 + wxx + wyy)
-            
-            def du_dx_exact(x, y):
-                w, wx, _, _, _ = wfct(x, y)
-                return np.exp(w) * wx
-            
-            def du_dy_exact(x, y):
-                w, _, wy, _, _ = wfct(x, y)
-                return np.exp(w) * wy
-        else:
-            # Use FUNCTION_CASE functions
-            u_exact = solution_function
-            f_rhs = load_function
-            du_dx_exact = solution_function_derivative_x
-            du_dy_exact = solution_function_derivative_y
-        
-        # Precompute collocation data
-        CD = compute_collocation_data(n, J_MAX=16)
-        
-        # Solve
-        Uxy, xB, yB, con, dim_sys, rtimes = collocation_2d(n, H, wfct, f_rhs, CD, verbose=verbose)
-        
-        if Uxy is None:
-            print("Solver failed!")
-            return None
-        
-        # Compute exact solution at grid points
-        w_grid, _, _, _, _ = wfct(xB, yB)
-        mask = w_grid > 0
-        
-        uxy_exact = np.zeros_like(Uxy)
-        uxy_exact[mask] = u_exact(xB[mask], yB[mask])
-        
-        # Compute L2 and Linf errors
-        error = Uxy[mask] - uxy_exact[mask]
-        exact_vals = uxy_exact[mask]
-        
-        # Avoid division by zero
-        max_exact = np.max(np.abs(exact_vals)) if np.any(exact_vals != 0) else 1.0
-        l2_exact = np.sqrt(np.sum(exact_vals ** 2)) if np.any(exact_vals != 0) else 1.0
-        
-        ErrMax = np.max(np.abs(error)) / max_exact
-        ErrL2 = np.sqrt(np.sum(error ** 2)) / l2_exact
-        Err_MAE = np.mean(np.abs(error))
-        
-        # Compute H1 semi-norm error (gradient error)
-        h = 1.0 / H
-        dU_dx_num, dU_dy_num = compute_numerical_gradient(Uxy, h)
-        
-        # Exact gradients
-        dU_dx_ex = np.zeros_like(Uxy)
-        dU_dy_ex = np.zeros_like(Uxy)
-        dU_dx_ex[mask] = du_dx_exact(xB[mask], yB[mask])
-        dU_dy_ex[mask] = du_dy_exact(xB[mask], yB[mask])
-        
-        # H1 semi-norm: ||grad(u - u_h)||_L2
-        grad_error_x = dU_dx_num[mask] - dU_dx_ex[mask]
-        grad_error_y = dU_dy_num[mask] - dU_dy_ex[mask]
-        grad_exact_norm = np.sqrt(np.sum(dU_dx_ex[mask] ** 2 + dU_dy_ex[mask] ** 2))
-        
-        if grad_exact_norm > 0:
-            H1_semi = np.sqrt(np.sum(grad_error_x ** 2 + grad_error_y ** 2)) / grad_exact_norm
-        else:
-            H1_semi = np.nan
-        
-        # Full H1 error: sqrt(L2^2 + H1_semi^2)
-        H1_error = np.sqrt(ErrL2 ** 2 + H1_semi ** 2) if not np.isnan(H1_semi) else np.nan
-        
-        if verbose:
-            print("\n" + "=" * 40)
-            print("Results:")
-            print("=" * 40)
-            print(f"  Relative max error: {ErrMax:.6e}")
-            print(f"  Relative L2 error:  {ErrL2:.6e}")
-            print(f"  Mean absolute error: {Err_MAE:.6e}")
-            print(f"  H1 semi-norm error: {H1_semi:.6e}" if not np.isnan(H1_semi) else "  H1 semi-norm error: N/A")
-            print(f"  H1 error:           {H1_error:.6e}" if not np.isnan(H1_error) else "  H1 error:           N/A")
-            print(f"  Condition number:   {con:.2e}" if not np.isnan(con) else "  Condition number:   N/A")
-            print(f"  System dimension:   {dim_sys}")
-            print(f"\nTiming:")
-            print(f"  Classification/Assembly: {rtimes['sys']:.3f}s")
-            print(f"  Extension:               {rtimes['ext']:.3f}s")
-            print(f"  Solution:                {rtimes['sol']:.3f}s")
-            print(f"  Total:                   {rtimes['total']:.3f}s")
-        
-        return {
-            'Uxy': Uxy,
-            'xB': xB,
-            'yB': yB,
-            'uxy_exact': uxy_exact,
-            'ErrMax': ErrMax,
-            'ErrL2': ErrL2,
-            'MAE': Err_MAE,
-            'H1_semi': H1_semi,
-            'H1_error': H1_error,
-            'condition': con,
-            'dim': dim_sys,
-            'rtimes': rtimes,
-            'wfct': wfct,
-            'function_case': function_case if function_case is not None else old_case,
+    return {
+        'Uxy': Uxy,
+        'xB': xB,
+        'yB': yB,
+        'uxy_exact': uxy_exact,
+        'ErrMax': ErrMax,
+        'ErrL2': ErrL2,
+        'MAE': Err_MAE,
+        'H1_semi': H1_semi,
+        'H1_error': H1_error,
+        'condition': con,
+        'dim': dim_sys,
+        'rtimes': rtimes,
+        'wfct': wfct,
+        'function_case': function_case if function_case is not None else old_case,
         }
-    finally:
-        # Restore FUNCTION_CASE
-        FUNCTION_CASE = old_case
 
 
 def visualize_solution(results: Dict, show_error: bool = True):

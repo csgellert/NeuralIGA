@@ -9,9 +9,11 @@ NP_DTYPE = np.float64
 
 
 USE_SIGMOID_FOR_DISTANCE = False
-TRANSFORM = None  # Options: "sigmoid", "tanh", None
+TRANSFORM = None  # Options: "sigmoid", "tanh", "hollig", None
 #if TRANSFORM == "trapezoid": raise NameError("Trapezoid transform is not recommended, use sigmoid or tanh instead")
 TANG = 1  # Used for trapezoid transform, adjust as needed
+DELTA_HOLLIG = 0.2  # Controls the width of the strip for Höllig weight function
+GAMMA_HOLLIG = 3  # Controls the smoothness for Höllig weight function
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     assert x0 < x1 and y0 < y1
     knotvector_u = np.linspace(x0,x1,xDivision+2)
@@ -56,6 +58,8 @@ def distanceFromContur(x,y,model,transform=TRANSFORM):
         d = exponential(d).item()
     elif transform == "trapezoid":
         d = torch.where(d * TANG < 1, d * TANG, 1)
+    elif transform == "hollig":
+        d = hollig_weight(d).item()
     return d
 def distance_with_derivative(x,y,model,transform=TRANSFORM):
     crd = torch.tensor([x,y],requires_grad=True,dtype=TORCH_DTYPE)
@@ -77,6 +81,11 @@ def distance_with_derivative(x,y,model,transform=TRANSFORM):
         mask = d.squeeze()*TANG > 1
         dx = torch.where(mask, torch.tensor(0.0, dtype=TORCH_DTYPE), dx * TANG)
         dy = torch.where(mask, torch.tensor(0.0, dtype=TORCH_DTYPE), dy * TANG)
+    elif transform == "hollig":
+        dw_dd = hollig_weight_derivative(d)
+        dx = dw_dd * dx
+        dy = dw_dd * dy
+        d = hollig_weight(d).item()
     return d,dx,dy
 def distance_with_derivative_vect_trasformed(x,y,model,transform=TRANSFORM):
     crd = torch.tensor(np.array([x,y]),dtype=TORCH_DTYPE).T
@@ -107,6 +116,11 @@ def distance_with_derivative_vect_trasformed(x,y,model,transform=TRANSFORM):
         mask = d.squeeze()*TANG > 1
         dx = torch.where(mask, torch.tensor(0.0, dtype=TORCH_DTYPE), dx * TANG)
         dy = torch.where(mask, torch.tensor(0.0, dtype=TORCH_DTYPE), dy * TANG)
+    elif transform == "hollig":
+        dw_dd = hollig_weight_derivative(d).view(-1)
+        dx = dw_dd * dx
+        dy = dw_dd * dy
+        d = hollig_weight(d)
 
     #crd.grad.zero_()
     return d,dx,dy
@@ -122,6 +136,18 @@ def logarithmic(x):
     return torch.log(x + 1)
 def exponential(x):
     return torch.exp(x) - 1
+def hollig_weight(d, delta=DELTA_HOLLIG, gamma=GAMMA_HOLLIG):
+    """Höllig weight function: w(x) = 1 - max(0, 1 - dist/delta)^gamma"""
+    term = 1.0 - d / delta
+    term = torch.clamp(term, min=0.0)  # max(0, 1 - d/delta)
+    return 1.0 - torch.pow(term, gamma)
+def hollig_weight_derivative(d, delta=DELTA_HOLLIG, gamma=GAMMA_HOLLIG):
+    """Derivative of Höllig weight function with respect to distance d"""
+    term = 1.0 - d / delta
+    mask = term > 0  # Only non-zero derivative where term > 0
+    derivative = torch.zeros_like(d)
+    derivative[mask] = gamma * torch.pow(term[mask], gamma - 1) / delta
+    return derivative
 def plotMesh(xdiv=2, ydiv=3,delta=0):
     circle = plt.Circle((0, 0), 1, color='r')
     fig, ax = plt.subplots()
@@ -178,6 +204,25 @@ def plotAlayticHeatmap(solfun,n=10):
     plt.grid(False)
     plt.show()
 if __name__ == "__main__":
-    import NeuralImplicit
-    model= NeuralImplicit.load_models("double_circle_test")
-    plotDisctancefunction(model)
+    import Geomertry
+    model = Geomertry.AnaliticalDistanceCircle()
+    #Create a 3D plot of the SDF
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+    import numpy as np
+    import torch
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    x = np.linspace(-1.01, 1.01, 100)
+    y = np.linspace(-1.01, 1.01, 100)
+    X, Y = np.meshgrid(x, y)
+    pts = torch.tensor(np.vstack([X.ravel(), Y.ravel()]).T, dtype=torch.float64)
+    #target = SDF.distance_from_line_vectorized(pts, angle=math.pi/6, offset=0.0)
+
+    pred = distance_with_derivative_vect_trasformed(X.ravel(), Y.ravel(), model, transform=TRANSFORM)[0].detach().numpy()
+
+    Z = pred.reshape(X.shape)
+    Z = np.clip(Z,0, 2)
+    print(np.max(Z))
+    ax.plot_surface(X, Y, Z, cmap='viridis')
+    plt.show()

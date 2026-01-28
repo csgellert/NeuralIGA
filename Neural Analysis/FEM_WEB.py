@@ -21,6 +21,7 @@ import mesh
 import torch
 from tqdm import tqdm
 from scipy import linalg
+from scipy import sparse
 
 # Use float64 for better numerical accuracy
 torch.set_default_dtype(torch.float64)
@@ -285,11 +286,14 @@ def _get_local_inner_dofs(elemx, elemy, p, q, bspline_classification, basis_to_i
 
 
 def _assembly_web(K, F, Ke, Fe, reduced_indices):
-    """Assemble a local WEB element matrix/vector into the global reduced system."""
+    """Assemble a local WEB element matrix/vector into the global reduced system (sparse version)."""
     if len(reduced_indices) == 0:
         return K, F
     idxs = np.asarray(reduced_indices, dtype=np.int64)
-    K[np.ix_(idxs, idxs)] += Ke
+    # For sparse lil_matrix, element-wise addition is efficient
+    for i_loc, i_glob in enumerate(idxs):
+        for j_loc, j_glob in enumerate(idxs):
+            K[i_glob, j_glob] += Ke[i_loc, j_loc]
     F[idxs] += Fe
     return K, F
 
@@ -738,9 +742,9 @@ def processAllElementsWEB(
     # Get B-spline objects
     Bspxi, Bspeta = _get_bspline_objects(knotvector_x, knotvector_y, p, q)
     
-    # Initialize reduced system
+    # Initialize reduced system (use sparse matrix for efficiency)
     n_inner = bspline_classification['n_inner']
-    K = np.zeros((n_inner, n_inner))
+    K = sparse.lil_matrix((n_inner, n_inner), dtype=np.float64)
     F = np.zeros(n_inner)
     
     total_elements = etype["inner"] + etype["boundary"]
@@ -803,6 +807,9 @@ def transformStandardSystemToWEB(
     n_basis_y = len(knotvector_y) - q - 1
     n_total_expected = n_basis_x * n_basis_y
 
+    # Convert sparse matrix to dense if necessary
+    if sparse.issparse(K_full):
+        K_full = K_full.toarray()
     K_full = np.asarray(K_full, dtype=NP_DTYPE)
     F_full = np.asarray(F_full, dtype=NP_DTYPE)
 
@@ -922,6 +929,9 @@ def transformStandardSystemToWEBSelectiveDiagonalExtraction(
     n_basis_y = len(knotvector_y) - q - 1
     n_total_expected = n_basis_x * n_basis_y
 
+    # Convert sparse matrix to dense if necessary
+    if sparse.issparse(K_full):
+        K_full = K_full.toarray()
     K_full = np.asarray(K_full, dtype=NP_DTYPE)
     F_full = np.asarray(F_full, dtype=NP_DTYPE)
 
@@ -1057,24 +1067,27 @@ def transformStandardSystemToWEBSelectiveDiagonalExtraction(
 
 def solveWEB(K, F):
     """
-    Solve the WEB-spline system.
+    Solve the WEB-spline system using sparse matrix format.
     
     Since we only have inner DOFs, the system should be well-conditioned.
     """
+    # Convert to csr format for efficient operations
+    K_csr = K.tocsr()
+    
     # Check for zero rows (shouldn't happen with WEB-splines, but be safe)
-    non_zero_rows = np.any(K != 0, axis=1)
+    non_zero_rows = np.array(K_csr.getnnz(axis=1) > 0)
     
     if not np.any(non_zero_rows):
         return np.zeros(len(F))
     
     if np.all(non_zero_rows):
         # Full system - use direct solve
-        K_solve = K
+        K_solve = K_csr.toarray()
         F_solve = F
         full_solve = True
     else:
         # Some zero rows - reduce system
-        K_solve = K[non_zero_rows][:, non_zero_rows]
+        K_solve = K_csr[non_zero_rows, :][:, non_zero_rows].toarray()
         F_solve = F[non_zero_rows]
         full_solve = False
     

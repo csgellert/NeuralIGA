@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import evaluation
+from scipy import sparse
 
 # Use float64 for better numerical accuracy
 torch.set_default_dtype(torch.float64)
@@ -14,14 +15,17 @@ import Geomertry
 from network_defs import load_test_model
 import FEM_WEB
 import evaluation_WEB
+
+# Use float64 for better numerical accuracy
+NP_DTYPE = np.float64
 #torch.set_default_dtype(torch.float64)
 
 #model = load_test_model("SIREN_circle", "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 30.0})
 model = Geomertry.AnaliticalDistanceCircle()
-DIVISIONS = 100
-ORDER = 3
+DIVISIONS = 50
+ORDER = 2
 DELTA = 0.005
-USE_WEB =True
+USE_WEB =False
 USE_WEB_TRANSFORM = False
 USE_WEB_DIAG_EXTRACT = False
 assert sum([bool(USE_WEB), bool(USE_WEB_TRANSFORM), bool(USE_WEB_DIAG_EXTRACT)]) <= 1, \
@@ -42,8 +46,10 @@ NControl_w = len(knotvector_w)-q-1
 #mesh.plotDisctancefunction(model)
 Geomertry.init_spl(x,p,None,knotvector_u)
 
-K = np.zeros(((xDivision+p+1)*(yDivision+q+1),(xDivision+p+1)*(yDivision+q+1)))
-F = np.zeros((xDivision+p+1)*(yDivision+q+1))
+# Use sparse matrix format (lil_matrix is efficient for construction)
+matrix_size = (xDivision+p+1)*(yDivision+q+1)
+K = sparse.lil_matrix((matrix_size, matrix_size), dtype=NP_DTYPE)
+F = np.zeros(matrix_size)
 print("Initialisation finished")
 start = time.time()
 with cProfile.Profile() as pr:

@@ -581,22 +581,21 @@ def train_hotspot(model, fun_num, num_epochs=1000, batch_size=1500, device=None,
         loss += bnd_grd_coeff * boundary_grad_term
         
         # Hotspot data
-        if hotspot_coeff > 0.0:
-            #random points in the domain
-            margain = data_gen_params.get('margain', 0.05)
-            pts = torch.rand(batch_size, 2, device=device) * (2.0+2*margain) - 1.0 - margain # Range [-1, 1]
-            pts.requires_grad_(True)
-            pred_hotspot = model(pts)
-            grad_hotspot = torch.autograd.grad(outputs=pred_hotspot, inputs=pts,
-                                              grad_outputs=torch.ones_like(pred_hotspot),
-                                              create_graph=True, retain_graph=True)[0]
-            grad_length = grad_hotspot.norm(dim=1)
-            lambda_hotspot = hotspot_params.get('lambda', 0.1)
-            L_heat = torch.mean(0.5*torch.exp(-2*lambda_hotspot*torch.abs(pred_hotspot)) *(grad_length**2 +1)) 
-            loss += hotspot_coeff * L_heat
-            eikon_loss = criterion(grad_length, torch.ones_like(pred_hotspot))
-            loss += eikon_coeff * eikon_loss
-        off_srf_punish = torch.exp(-10*torch.abs(pred_hotspot)).mean()
+        #random points in the domain
+        margain = data_gen_params.get('margain', 0.05)
+        pts = torch.rand(batch_size, 2, device=device) * (2.0+2*margain) - 1.0 - margain # Range [-1, 1]
+        pts.requires_grad_(True)
+        pred_hotspot = model(pts)
+        grad_hotspot = torch.autograd.grad(outputs=pred_hotspot, inputs=pts,
+                                            grad_outputs=torch.ones_like(pred_hotspot),
+                                            create_graph=True, retain_graph=True)[0]
+        grad_length = grad_hotspot.norm(dim=1)
+        lambda_hotspot = hotspot_params.get('lambda', 0.1)
+        L_heat = torch.mean(0.5*torch.exp(-2*lambda_hotspot*torch.abs(pred_hotspot)) *(grad_length**2 +1)) 
+        loss += hotspot_coeff * L_heat
+        eikon_loss = criterion(grad_length, torch.ones_like(pred_hotspot))
+        loss += eikon_coeff * eikon_loss
+        off_srf_punish = torch.exp(-10*torch.abs(pred_hotspot)-1).mean()
         loss += off_srf_coeff * off_srf_punish
 
         model.optimizer.zero_grad()

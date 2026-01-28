@@ -6,13 +6,15 @@ import math
 import torch
 from bspline import Bspline
 from tqdm import tqdm
+from scipy import sparse
+from scipy import linalg
 
 # Use float64 for better numerical accuracy
 torch.set_default_dtype(torch.float64)
 NP_DTYPE = np.float64
 TORCH_DTYPE = torch.float64
 
-FUNCTION_CASE = 1
+FUNCTION_CASE = 3
 MAX_SUBDIVISION = 4
 #assert FUNCTION_CASE != 1
 # Pre-compute Gauss quadrature data to avoid repeated calculations
@@ -508,13 +510,15 @@ def _get_assembly_indices(elemx, elemy, p, q, xDivision, yDivision):
     return idxs
 
 def assembly(K, F, Ke, Fe, elemx, elemy, p, q, xDivision, yDivision):
-    """Optimized assembly using NumPy advanced indexing"""
+    """Optimized assembly using sparse matrix format"""
     # Get cached indices
     idxs = _get_assembly_indices(elemx, elemy, p, q, xDivision, yDivision)
     
-    # Vectorized matrix assembly using outer indexing
-    idx_mesh = np.ix_(idxs, idxs)
-    K[idx_mesh] += Ke
+    # Add element matrix to sparse global matrix
+    # K is a lil_matrix, which supports efficient element-wise addition
+    for i, idx_i in enumerate(idxs):
+        for j, idx_j in enumerate(idxs):
+            K[idx_i, idx_j] += Ke[i, j]
     
     # Vectorized vector assembly
     F[idxs] += Fe
@@ -522,26 +526,23 @@ def assembly(K, F, Ke, Fe, elemx, elemy, p, q, xDivision, yDivision):
     return K, F
 
 def solveWeak(K, F):
-    """Optimized linear solver with efficient zero-row detection"""
-    # Use np.any for faster zero-row detection (checks for non-zero)
-    non_zero_rows = np.any(K != 0, axis=1)
+    """Optimized linear solver for sparse matrices with efficient zero-row detection"""
+    # Convert to csr format for efficient operations
+    K_csr = K.tocsr()
+    
+    # Detect non-zero rows
+    non_zero_rows = np.array(K_csr.getnnz(axis=1) > 0)
     
     if not np.any(non_zero_rows):
         return np.zeros(len(F))
     
-    # For symmetric case, zero rows == zero cols
-    K_reduced = K[non_zero_rows][:, non_zero_rows]
+    # Extract reduced system (convert to dense for solving)
+    K_reduced = K_csr[non_zero_rows, :][:, non_zero_rows].toarray()
     F_reduced = F[non_zero_rows]
     
     u = np.zeros(len(F))
-    #print("condition number of reduced K:", np.linalg.cond(K_reduced))
-    # Try scipy.linalg.solve for potentially better performance (uses LAPACK)
-    try:
-        from scipy import linalg
-        u_reduced = linalg.solve(K_reduced, F_reduced, assume_a='sym')
-    except ImportError:
-        # Fall back to numpy if scipy not available
-        u_reduced = np.linalg.solve(K_reduced, F_reduced)
+    # Use scipy.linalg.solve for better performance (uses LAPACK)
+    u_reduced = linalg.solve(K_reduced, F_reduced, assume_a='sym')
     print("Max error:", np.max(np.abs(K_reduced @ u_reduced - F_reduced)))
     u[non_zero_rows] = u_reduced
     return u

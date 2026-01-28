@@ -3,6 +3,7 @@ import torch
 import evaluation
 import json
 from datetime import datetime
+from scipy import sparse
 
 # Use float64 for better numerical accuracy
 torch.set_default_dtype(torch.float64)
@@ -97,8 +98,10 @@ for order in orders:
         NControl_w = len(knotvector_w)-q-1
         Geomertry.init_spl(x,p,None,knotvector_u)
         
-        K = np.zeros(((xDivision+p+1)*(yDivision+q+1),(xDivision+p+1)*(yDivision+q+1)))
-        F = np.zeros((xDivision+p+1)*(yDivision+q+1))
+        # Use sparse matrix format (lil_matrix is efficient for construction)
+        matrix_size = (xDivision+p+1)*(yDivision+q+1)
+        K = sparse.lil_matrix((matrix_size, matrix_size), dtype=np.float64)
+        F = np.zeros(matrix_size)
         if USE_WEB:
             # Assemble and solve with WEB-splines
             K, F, etype, bsp_class, ext_basis = FEM_WEB.processAllElementsWEB(

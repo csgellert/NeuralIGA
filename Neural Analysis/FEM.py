@@ -19,8 +19,33 @@ MAX_SUBDIVISION = 0
 #assert FUNCTION_CASE != 1
 # Pre-compute Gauss quadrature data to avoid repeated calculations
 _GAUSS_CACHE = {}
-DOMAIN = {"x1": -1, "x2": 1, "y1": -1, "y2": 1}
-#DOMAIN = {"x1": -4, "x2": 4, "y1": -3, "y2": 3}
+
+
+def get_domain_for_case(function_case: int) -> dict:
+    """Return the physical domain box for a given FUNCTION_CASE.
+
+    Notes:
+        - Case 0 matches the original WEB-spline disc example defined on [0,1]^2.
+        - Cases 1..7 use the [-1,1]^2 box.
+        - Case 8 uses the [-4,4]x[-3,3] box.
+    """
+    if function_case == 0:
+        return {"x1": 0.0, "x2": 1.0, "y1": 0.0, "y2": 1.0}
+    if 1 <= function_case <= 7:
+        return {"x1": -1.0, "x2": 1.0, "y1": -1.0, "y2": 1.0}
+    if function_case == 8:
+        return {"x1": -4.0, "x2": 4.0, "y1": -3.0, "y2": 3.0}
+    raise NotImplementedError(f"Unknown FUNCTION_CASE={function_case}")
+
+
+def set_function_case(function_case: int) -> None:
+    """Set FUNCTION_CASE and keep DOMAIN consistent."""
+    global FUNCTION_CASE, DOMAIN
+    FUNCTION_CASE = int(function_case)
+    DOMAIN = get_domain_for_case(FUNCTION_CASE)
+
+
+DOMAIN = get_domain_for_case(FUNCTION_CASE)
 def _get_gauss_points(p):
     """Cache Gauss quadrature points and weights.
     
@@ -75,6 +100,16 @@ def _get_gauss_points(p):
 # Vectorized function evaluations
 def load_function_vectorized(x, y):
     """Vectorized version of load_function"""
+    if FUNCTION_CASE == 0:
+        # WEB-spline disc example on [0,1]^2:
+        # u = exp(w) - 1 with w = 1 - (2x-1)^2 - (2y-1)^2
+        # f = -Δu = -exp(w) * (|∇w|^2 + Δw)
+        wx = -4 * (2 * x - 1)
+        wy = -4 * (2 * y - 1)
+        wxx = -8.0
+        wyy = -8.0
+        w = 1 - (2 * x - 1) ** 2 - (2 * y - 1) ** 2
+        return -np.exp(w) * (wx ** 2 + wy ** 2 + wxx + wyy)
     if FUNCTION_CASE == 1:
         return -8*x
     elif FUNCTION_CASE == 2:
@@ -111,6 +146,8 @@ def load_function_vectorized(x, y):
 
 def dirichletBoundary_vectorized(x, y):
     """Vectorized version of dirichletBoundary"""
+    if FUNCTION_CASE == 0:
+        return np.zeros_like(x)
     if FUNCTION_CASE == 1:
         return np.full_like(x, 0)
     if FUNCTION_CASE == 2:
@@ -183,6 +220,9 @@ def dirichletBoundaryDerivativeYY_vectorized(x, y):
 
 
 def solution_function(x,y):
+    if FUNCTION_CASE == 0:
+        w = 1 - (2 * x - 1) ** 2 - (2 * y - 1) ** 2
+        return np.exp(w) - 1
     if FUNCTION_CASE == 1:
         return x*(x**2 + y**2 -1)
     elif FUNCTION_CASE == 2:
@@ -201,6 +241,10 @@ def solution_function(x,y):
         return np.sin(e*k*0.5)
     else: raise NotImplementedError
 def solution_function_derivative_x(x,y):
+    if FUNCTION_CASE == 0:
+        w = 1 - (2 * x - 1) ** 2 - (2 * y - 1) ** 2
+        wx = -4 * (2 * x - 1)
+        return np.exp(w) * wx
     if FUNCTION_CASE == 1:
         return 3*x**2 + y**2 -1
     elif FUNCTION_CASE == 2:
@@ -225,6 +269,10 @@ def solution_function_derivative_x(x,y):
         return 0.5*np.cos(e*k*0.5)*(ex*k + e*kx)
     else: raise NotImplementedError
 def solution_function_derivative_y(x,y):
+    if FUNCTION_CASE == 0:
+        w = 1 - (2 * x - 1) ** 2 - (2 * y - 1) ** 2
+        wy = -4 * (2 * y - 1)
+        return np.exp(w) * wy
     if FUNCTION_CASE == 1:
         return 2*x*y
     elif FUNCTION_CASE == 2:

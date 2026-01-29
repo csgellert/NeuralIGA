@@ -366,6 +366,38 @@ class AnaliticalDistanceCircle_smooth(nn.Module):
       plt.ylabel('y')
       plt.title('Contour plot of distance function')
       plt.show()
+
+
+class AnaliticalDistanceDisc_WEB(nn.Module):
+   """Analytic WEB-spline 'disc' weight function on [0,1]^2.
+
+   Matches collocation_WEB.DiscWeightFunction / example_exact_solution_disc:
+      w(x,y) = 1 - (2x-1)^2 - (2y-1)^2
+   Domain: {(x,y) in [0,1]^2 : w(x,y) > 0} (disc radius 0.5 centered at (0.5,0.5)).
+   """
+
+   def __init__(self):
+      super().__init__()
+
+   def forward(self, crd):
+      x = crd[..., 0]
+      y = crd[..., 1]
+      return 1 - (2 * x - 1) ** 2 - (2 * y - 1) ** 2
+
+   def create_contour_plot(self, resolution=200):
+      x = np.linspace(0.0, 1.0, resolution)
+      y = np.linspace(0.0, 1.0, resolution)
+      X, Y = np.meshgrid(x, y)
+      crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+      with torch.no_grad():
+         Z = self.forward(crd).cpu().numpy()
+      plt.contourf(X, Y, Z, levels=50, cmap='viridis')
+      plt.colorbar(label='w')
+      plt.contour(X, Y, Z, levels=[0], colors='k', linewidths=1)
+      plt.xlabel('x')
+      plt.ylabel('y')
+      plt.title('WEB disc weight function w (zero contour shown)')
+      plt.show()
 if __name__ == "__main__":
    analitical_model2 = AnaliticalDistanceLshape()
    model = analitical_model2

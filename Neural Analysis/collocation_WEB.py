@@ -26,6 +26,7 @@ from scipy.linalg import solve as dense_solve
 import time
 from typing import Callable, Tuple, Dict, Optional, Union
 import torch
+import FEM
 
 
 # Use float64 for better numerical accuracy
@@ -61,7 +62,7 @@ from FEM import dirichletBoundaryDerivativeY_vectorized as dirichletBoundaryDeri
 from FEM import dirichletBoundaryDerivativeXX_vectorized as dirichletBoundaryDerivativeXX
 from FEM import dirichletBoundaryDerivativeYY_vectorized as dirichletBoundaryDerivativeYY
 from FEM import FUNCTION_CASE
-DOMAIN = {"x1": -1, "x2": 1, "y1": -1, "y2": 1}
+DOMAIN = FEM.DOMAIN
 # =============================================================================
 # B-SPLINE EVALUATION FUNCTIONS
 # =============================================================================
@@ -1251,8 +1252,15 @@ def compute_numerical_gradient(U: np.ndarray, h: float) -> Tuple[np.ndarray, np.
     return dU_dx, dU_dy
 
 
-def run_example(model,n: int = 2, H: int = 20,
-                function_case: int = None, verbose: bool = True):
+def run_example(
+    model,
+    n: int = 2,
+    H: int = 20,
+    function_case: Optional[int] = None,
+    verbose: bool = True,
+    show_plot: bool = True,
+    CD: Optional[Dict] = None,
+):
     """
     Run the collocation example.
     
@@ -1275,128 +1283,126 @@ def run_example(model,n: int = 2, H: int = 20,
     results : dict
         Dictionary with solution, errors, and timing information
     """
-    # Case 1: u = x*(x²+y²-1) has u=0 on unit circle (homogeneous Dirichlet BC)
-
-
     global DOMAIN
-    if verbose:
-        print("=" * 60)
-        print(f"WEB-Spline Collocation: degree={n}, H={H}, domain={DOMAIN}, case={function_case}")
-        print("=" * 60)
+    old_case = FEM.FUNCTION_CASE
+    old_domain = FEM.DOMAIN
+    old_domain_local = DOMAIN
+    if function_case is not None:
+        FEM.set_function_case(function_case)
+    active_case = FEM.FUNCTION_CASE
+    DOMAIN = FEM.DOMAIN
 
-    # Weight function - using analytical circle distance in [-1,1]² domain
-    #model = Geomertry.AnaliticalDistanceCircle()
-    #model  = Geomertry.AnaliticalDistanceLshape()
-    #model = load_test_model("SIREN_L_3_0", "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 80, "w_hidden": 120.0})
-    #model = Geomertry.AnaliticalDistanceLshape_RFunction()
-    wfct = NeuralWeightFunction(model=model, domain=DOMAIN)
-    #model.create_contour_plot(100)
-    # Create domain transformer for exact solution comparison
-    transformer = create_domain_transformer(DOMAIN)
+    try:
+        if verbose:
+            print("=" * 60)
+            print(f"WEB-Spline Collocation: degree={n}, H={H}, domain={DOMAIN}, case={active_case}")
+            print("=" * 60)
 
-    # Precompute collocation data
-    CD = compute_collocation_data(n, J_MAX=16)
+        wfct = NeuralWeightFunction(model=model, domain=DOMAIN)
+        transformer = create_domain_transformer(DOMAIN)
 
-    # Solve - now with domain parameter, f is automatically transformed and scaled!
-    Uxy, xB, yB, con, dim_sys, rtimes = collocation_2d(
-        n, H, wfct, 
-        f=load_function,  # Pass original function - domain transform handled internally
-        CD=CD, 
-        verbose=verbose,
-        domain=DOMAIN  # NEW: domain parameter handles coordinate transform + Laplacian scaling
-    )
+        if CD is None:
+            CD = compute_collocation_data(n, J_MAX=16)
 
-    if Uxy is None:
-        print("Solver failed!")
-        raise RuntimeError("Collocation solver failed.")
+        Uxy, xB, yB, con, dim_sys, rtimes = collocation_2d(
+            n,
+            H,
+            wfct,
+            f=load_function,
+            CD=CD,
+            verbose=verbose,
+            domain=DOMAIN,
+        )
 
-    # Compute exact solution at grid points using transformer
-    w_grid, _, _, _, _ = wfct(xB, yB)
-    mask = w_grid > 0
+        if Uxy is None:
+            print("Solver failed!")
+            raise RuntimeError("Collocation solver failed.")
 
-    # Use transformer to wrap exact solution (transforms grid -> physical coords)
-    u_exact_transformed = transformer.wrap_function(solution_function)
-    du_dx_transformed = transformer.wrap_derivative_x(solution_function_derivative_x)
-    du_dy_transformed = transformer.wrap_derivative_y(solution_function_derivative_y)
+        w_grid, _, _, _, _ = wfct(xB, yB)
+        mask = w_grid > 0
 
-    uxy_exact = np.zeros_like(Uxy)
-    uxy_exact[mask] = u_exact_transformed(xB[mask], yB[mask])
+        u_exact_transformed = transformer.wrap_function(solution_function)
+        du_dx_transformed = transformer.wrap_derivative_x(solution_function_derivative_x)
+        du_dy_transformed = transformer.wrap_derivative_y(solution_function_derivative_y)
 
-    # Compute L2 and Linf errors
-    error = Uxy[mask] - uxy_exact[mask]
-    exact_vals = uxy_exact[mask]
+        uxy_exact = np.zeros_like(Uxy)
+        uxy_exact[mask] = u_exact_transformed(xB[mask], yB[mask])
 
-    max_exact = np.max(np.abs(exact_vals)) if np.any(exact_vals != 0) else 1.0
-    l2_exact = np.sqrt(np.sum(exact_vals ** 2)) if np.any(exact_vals != 0) else 1.0
+        error = Uxy[mask] - uxy_exact[mask]
+        exact_vals = uxy_exact[mask]
 
-    ErrMax = np.max(np.abs(error)) / max_exact
-    ErrL2 = np.sqrt(np.sum(error ** 2)) / l2_exact
-    Err_MAE = np.mean(np.abs(error))
-    Err_L_inf = np.max(np.abs(error))
+        max_exact = np.max(np.abs(exact_vals)) if np.any(exact_vals != 0) else 1.0
+        l2_exact = np.sqrt(np.sum(exact_vals ** 2)) if np.any(exact_vals != 0) else 1.0
 
-    # Compute H1 semi-norm error
-    h = 1.0 / H
-    dU_dx_num, dU_dy_num = compute_numerical_gradient(Uxy, h)
+        ErrMax = np.max(np.abs(error)) / max_exact
+        ErrL2 = np.sqrt(np.sum(error ** 2)) / l2_exact
+        Err_MAE = np.mean(np.abs(error))
+        Err_L_inf = np.max(np.abs(error))
 
-    dU_dx_ex = np.zeros_like(Uxy)
-    dU_dy_ex = np.zeros_like(Uxy)
-    dU_dx_ex[mask] = du_dx_transformed(xB[mask], yB[mask])
-    dU_dy_ex[mask] = du_dy_transformed(xB[mask], yB[mask])
+        h = 1.0 / H
+        dU_dx_num, dU_dy_num = compute_numerical_gradient(Uxy, h)
 
-    grad_error_x = dU_dx_num[mask] - dU_dx_ex[mask]
-    grad_error_y = dU_dy_num[mask] - dU_dy_ex[mask]
-    grad_exact_norm = np.sqrt(np.sum(dU_dx_ex[mask] ** 2 + dU_dy_ex[mask] ** 2))
-
-    if grad_exact_norm > 0:
-        H1_semi = np.sqrt(np.sum(grad_error_x ** 2 + grad_error_y ** 2)) / grad_exact_norm
-    else:
         H1_semi = np.nan
+        try:
+            dU_dx_ex = np.zeros_like(Uxy)
+            dU_dy_ex = np.zeros_like(Uxy)
+            dU_dx_ex[mask] = du_dx_transformed(xB[mask], yB[mask])
+            dU_dy_ex[mask] = du_dy_transformed(xB[mask], yB[mask])
 
-    H1_error = np.sqrt(ErrL2 ** 2 + H1_semi ** 2) if not np.isnan(H1_semi) else np.nan
+            grad_error_x = dU_dx_num[mask] - dU_dx_ex[mask]
+            grad_error_y = dU_dy_num[mask] - dU_dy_ex[mask]
+            grad_exact_norm = np.sqrt(np.sum(dU_dx_ex[mask] ** 2 + dU_dy_ex[mask] ** 2))
 
-    if verbose:
-        print("\n" + "=" * 40)
-        print("Results:")
-        print("=" * 40)
-        print(f"  Relative max error: {ErrMax:.6e}")
-        print(f"  Relative L2 error:  {ErrL2:.6e}")
-        print(f"  Mean absolute error: {Err_MAE:.6e}")
-        print(f"  Absolute L-inf error: {Err_L_inf:.6e}")
-        print(f"  H1 semi-norm error: {H1_semi:.6e}" if not np.isnan(H1_semi) else "  H1 semi-norm error: N/A")
-        print(f"  H1 error:           {H1_error:.6e}" if not np.isnan(H1_error) else "  H1 error:           N/A")
-        print(f"  Condition number:   {con:.2e}" if not np.isnan(con) else "  Condition number:   N/A")
-        print(f"  System dimension:   {dim_sys}")
-        print(f"\nTiming:")
-        print(f"  Classification/Assembly: {rtimes['sys']:.3f}s")
-        print(f"  Extension:               {rtimes['ext']:.3f}s")
-        print(f"  Solution:                {rtimes['sol']:.3f}s")
-        print(f"  Total:                   {rtimes['total']:.3f}s")
+            if grad_exact_norm > 0:
+                H1_semi = np.sqrt(np.sum(grad_error_x ** 2 + grad_error_y ** 2)) / grad_exact_norm
+        except NotImplementedError:
+            H1_semi = np.nan
 
-    result = {
-        'Uxy': Uxy, 'xB': xB, 'yB': yB, 'uxy_exact': uxy_exact,
-        'ErrMax': ErrMax, 'ErrL2': ErrL2, 'MAE': Err_MAE,
-        'H1_semi': H1_semi, 'H1_error': H1_error,
-        'condition': con, 'dim': dim_sys, 'rtimes': rtimes,
-        'wfct': wfct, 'function_case': function_case
-    }
-    visualize_solution(result)
-        
-    return {
-        'Uxy': Uxy,
-        'xB': xB,
-        'yB': yB,
-        'uxy_exact': uxy_exact,
-        'ErrMax': ErrMax,
-        'ErrL2': ErrL2,
-        'MAE': Err_MAE,
-        'H1_semi': H1_semi,
-        'H1_error': H1_error,
-        'condition': con,
-        'dim': dim_sys,
-        'rtimes': rtimes,
-        'wfct': wfct,
-        'function_case': function_case if function_case is not None else old_case,
+        H1_error = np.sqrt(ErrL2 ** 2 + H1_semi ** 2) if not np.isnan(H1_semi) else np.nan
+
+        if verbose:
+            print("\n" + "=" * 40)
+            print("Results:")
+            print("=" * 40)
+            print(f"  Relative max error: {ErrMax:.6e}")
+            print(f"  Relative L2 error:  {ErrL2:.6e}")
+            print(f"  Mean absolute error: {Err_MAE:.6e}")
+            print(f"  Absolute L-inf error: {Err_L_inf:.6e}")
+            print(f"  H1 semi-norm error: {H1_semi:.6e}" if not np.isnan(H1_semi) else "  H1 semi-norm error: N/A")
+            print(f"  H1 error:           {H1_error:.6e}" if not np.isnan(H1_error) else "  H1 error:           N/A")
+            print(f"  Condition number:   {con:.2e}" if not np.isnan(con) else "  Condition number:   N/A")
+            print(f"  System dimension:   {dim_sys}")
+            print(f"\nTiming:")
+            print(f"  Classification/Assembly: {rtimes['sys']:.3f}s")
+            print(f"  Extension:               {rtimes['ext']:.3f}s")
+            print(f"  Solution:                {rtimes['sol']:.3f}s")
+            print(f"  Total:                   {rtimes['total']:.3f}s")
+
+        result = {
+            'Uxy': Uxy,
+            'xB': xB,
+            'yB': yB,
+            'uxy_exact': uxy_exact,
+            'ErrMax': ErrMax,
+            'ErrL2': ErrL2,
+            'MAE': Err_MAE,
+            'H1_semi': H1_semi,
+            'H1_error': H1_error,
+            'condition': con,
+            'dim': dim_sys,
+            'rtimes': rtimes,
+            'wfct': wfct,
+            'function_case': active_case,
         }
+
+        if show_plot:
+            visualize_solution(result)
+
+        return result
+    finally:
+        FEM.FUNCTION_CASE = old_case
+        FEM.DOMAIN = old_domain
+        DOMAIN = old_domain_local
 
 
 def visualize_solution(results: Dict, show_error: bool = True):
@@ -1469,8 +1475,12 @@ def visualize_solution(results: Dict, show_error: bool = True):
     plt.show()
 
 
-def convergence_study(n_list: list = None, H_list: list = None, domain: str = 'disc', 
-                      function_case: int = None):
+def convergence_study(
+    model,
+    n_list: list = None,
+    H_list: list = None,
+    function_case: int = None,
+):
     """
     Perform a convergence study.
     
@@ -1497,10 +1507,10 @@ def convergence_study(n_list: list = None, H_list: list = None, domain: str = 'd
     
     results = {}
     
-    fc = function_case if function_case is not None else FUNCTION_CASE
+    fc = function_case if function_case is not None else FEM.FUNCTION_CASE
     
     print("=" * 110)
-    print(f"Convergence Study (FUNCTION_CASE={fc}, domain={domain})")
+    print(f"Convergence Study (FUNCTION_CASE={fc}, domain={DOMAIN})")
     print("=" * 110)
     print(f"{'n':>3} | {'H':>4} | {'ErrMax':>10} | {'ErrL2':>10} | {'MAE':>10} | {'H1_semi':>10} | {'H1_err':>10} | {'Cond':>10} | {'Time':>8}")
     print("-" * 110)
@@ -1509,7 +1519,7 @@ def convergence_study(n_list: list = None, H_list: list = None, domain: str = 'd
         CD = compute_collocation_data(n, J_MAX=16)
         
         for H in H_list:
-            res = run_example(n, H, domain, verbose=False, function_case=function_case)
+            res = run_example(model, n=n, H=H, function_case=function_case, verbose=False, show_plot=False, CD=CD)
             if res is not None:
                 key = (n, H)
                 results[key] = res
@@ -1542,12 +1552,7 @@ def convergence_study(n_list: list = None, H_list: list = None, domain: str = 'd
 # =============================================================================
 
 if __name__ == "__main__":
-    # Run simple example
-    results = run_example(n=3, H=50, domain='shovel', function_case=0, verbose=True)
-    
-    if results is not None:
-        # Optionally visualize
-        try:
-            visualize_solution(results)
-        except ImportError:
-            print("\nNote: Install matplotlib to visualize results")
+    print("Run this module from a notebook/script. Example:")
+    print("  from Geomertry import AnaliticalDistanceCircle")
+    print("  import collocation_WEB as cWEB")
+    print("  res = cWEB.run_example(AnaliticalDistanceCircle(), n=3, H=50, function_case=1)")

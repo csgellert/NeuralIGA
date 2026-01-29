@@ -21,15 +21,14 @@ NP_DTYPE = np.float64
 #torch.set_default_dtype(torch.float64)
 
 #model = load_test_model("SIREN_circle", "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 30.0})
-model = Geomertry.AnaliticalDistance_CASE8()
-DIVISIONS = 100
-ORDER = 3
-DELTA = 0.000
+model = Geomertry.AnaliticalDistanceCircle()
+DIVISIONS = 20
+ORDER = 2
+DELTA = 0.005
 USE_WEB = False
 USE_WEB_TRANSFORM = True
-USE_WEB_DIAG_EXTRACT = False
-assert sum([bool(USE_WEB), bool(USE_WEB_TRANSFORM), bool(USE_WEB_DIAG_EXTRACT)]) <= 1, \
-    "USE_WEB / USE_WEB_TRANSFORM / USE_WEB_DIAG_EXTRACT are mutually exclusive"
+assert sum([bool(USE_WEB), bool(USE_WEB_TRANSFORM)]) <= 1, \
+    "USE_WEB / USE_WEB_TRANSFORM are mutually exclusive"
 
 
 #defining geometry:
@@ -55,7 +54,8 @@ with cProfile.Profile() as pr:
     if USE_WEB:
         print("Assembling using WEB/Höllig method")
         K, F, etype, bsp_class, ext_basis= FEM_WEB.processAllElementsWEB(model,p,q,knotvector_u,knotvector_w,
-                                              xDivision,yDivision,extension_strict=True,web_use_weight_normalization=True)
+                                              xDivision,yDivision,web_use_weight_normalization=True, 
+                                              extension_method="collocation")
     elif USE_WEB_TRANSFORM:
         print("Assembling using standard weighted B-splines")
         K, F, etype = FEM.processAllElements(model, p, q, knotvector_u, knotvector_w, 
@@ -71,28 +71,9 @@ with cProfile.Profile() as pr:
             knotvector_w,
             xDivision,
             yDivision,
-            extension_strict=True,
-            web_use_weight_normalization=False,
+            web_use_weight_normalization=True,
             web_ref_weight_eps=1e-6,
-        )
-    elif USE_WEB_DIAG_EXTRACT:
-        print("Assembling using standard weighted B-splines")
-        K, F, etype = FEM.processAllElements(model, p, q, knotvector_u, knotvector_w,
-                                      xDivision, yDivision, K, F)
-        print("Applying selective diagonal-based extraction (partial WEB transform)")
-        K, F, etype, diag_meta, E_tilde = FEM_WEB.transformStandardSystemToWEBSelectiveDiagonalExtraction(
-            K,
-            F,
-            model,
-            p,
-            q,
-            knotvector_u,
-            knotvector_w,
-            xDivision,
-            yDivision,
-            diag_threshold=1e-10,
-            diag_nonzero_eps=0.0,
-            extension_strict=True,
+            extension_method="collocation"
         )
     else:
         print("Assembling using standard method")
@@ -131,15 +112,6 @@ elif USE_WEB_TRANSFORM:
     evaluation_WEB.printL2andH1Errors(metrics)
     evaluation_WEB.plotSolutionHeatmapWEB(model,result,knotvector_u,knotvector_w,p,q,bspline_classification=bsp_class,extended_basis=ext_basis,N=100)
     evaluation_WEB.plotErrorHeatmapWEB(model,result,knotvector_u,knotvector_w,p,q,bspline_classification=bsp_class,extended_basis=ext_basis)
-elif USE_WEB_DIAG_EXTRACT:
-    print("Solving using selective diagonal-based extraction")
-    result = FEM_WEB.solveWEB(K,F)
-    print(f"Calculation time: {time.time()-start} ms")
-    print(f"p={p}\tdiv = {xDivision}")
-    print("Transforming solution back to standard B-spline basis")
-    results_v2 = E_tilde.T @ result
-    metrics_v2 = evaluation.evaluateAccuracy(model, results_v2, p, q, knotvector_u, knotvector_w, N=10000, seed=42)
-    evaluation.printErrorMetrics(metrics_v2)  # Pretty print all metrics
 else:
     print("Solving using standard method")
     result = FEM.solveWeak(K,F)

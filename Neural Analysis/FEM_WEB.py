@@ -38,8 +38,11 @@ from FEM import (
     _get_bspline_objects
 )
 
-# Import exact Höllig extension coefficient computation
-from hollig_exact_extension import computeExtensionCoefficientsHollig
+# Import extension coefficient computation
+from hollig_exact_extension import (
+    computeExtensionCoefficientsHollig,
+    computeExtensionCoefficientsCollocationLike,
+)
 
 
 # =============================================================================
@@ -628,6 +631,7 @@ def processAllElementsWEB(
     xDivision,
     yDivision,
     extension_strict: bool = True,
+    extension_method: str = "hollig_strict",
     web_use_weight_normalization: bool = False,
     web_ref_weight_eps: float = 1e-10,
 ):
@@ -705,22 +709,36 @@ def processAllElementsWEB(
         bspline_classification['inner_reference_points'] = ref_points
         print(f"      Computed w(x_i) for {len(ref_weights)} inner B-splines")
     
-    # Step 3: Compute extension coefficients using exact Höllig method (strict-only)
-    print("\n[3/4] Computing extension coefficients (Höllig exact, strict)...")
-    if not extension_strict:
-        raise ValueError(
-            "Non-strict WEB extension has been removed. Use extension_strict=True (strict Eq.(9) only)."
+    # Step 3: Compute extension coefficients
+    if extension_method not in ("hollig_strict", "collocation"):
+        raise ValueError("extension_method must be 'hollig_strict' or 'collocation'")
+
+    if extension_method == "hollig_strict":
+        print("\n[3/4] Computing extension coefficients (Höllig exact, strict)...")
+        if not extension_strict:
+            raise ValueError(
+                "Non-strict/fallback extension has been removed. Use extension_method='hollig_strict' with extension_strict=True."
+            )
+        extension_coeffs = computeExtensionCoefficientsHollig(
+            bspline_classification,
+            p,
+            q,
+            debug=False,
+            strict=True,
+            element_types=element_types,
+            xDivision=xDivision,
+            yDivision=yDivision,
         )
-    extension_coeffs = computeExtensionCoefficientsHollig(
-        bspline_classification,
-        p,
-        q,
-        debug=False,
-        strict=True,
-        element_types=element_types,
-        xDivision=xDivision,
-        yDivision=yDivision,
-    )
+    else:
+        print("\n[3/4] Computing extension coefficients (collocation-like)...")
+        extension_coeffs = computeExtensionCoefficientsCollocationLike(
+            bspline_classification,
+            p,
+            q,
+            knotvector_x=knotvector_x,
+            knotvector_y=knotvector_y,
+            debug=False,
+        )
     n_extended = sum(1 for v in extension_coeffs.values() if len(v) > 0)
     print(f"      Extended {n_extended} outer B-splines")
     
@@ -790,6 +808,7 @@ def transformStandardSystemToWEB(
     xDivision,
     yDivision,
     extension_strict: bool = True,
+    extension_method: str = "hollig_strict",
     web_use_weight_normalization: bool = True,
     web_ref_weight_eps: float = 1e-10,
 ):
@@ -848,16 +867,28 @@ def transformStandardSystemToWEB(
         bspline_classification['inner_reference_points'] = ref_points
 
     # Step 2: compute extension coefficients and extended basis
-    extension_coeffs = computeExtensionCoefficientsHollig(
-        bspline_classification,
-        p,
-        q,
-        debug=False,
-        strict=extension_strict,
-        element_types=element_types,
-        xDivision=xDivision,
-        yDivision=yDivision,
-    )
+    if extension_method not in ("hollig_strict", "collocation"):
+        raise ValueError("extension_method must be 'hollig_strict' or 'collocation'")
+    if extension_method == "hollig_strict":
+        extension_coeffs = computeExtensionCoefficientsHollig(
+            bspline_classification,
+            p,
+            q,
+            debug=False,
+            strict=True,
+            element_types=element_types,
+            xDivision=xDivision,
+            yDivision=yDivision,
+        )
+    else:
+        extension_coeffs = computeExtensionCoefficientsCollocationLike(
+            bspline_classification,
+            p,
+            q,
+            knotvector_x=knotvector_x,
+            knotvector_y=knotvector_y,
+            debug=False,
+        )
     extended_basis = buildExtendedBasis(bspline_classification, extension_coeffs)
 
     # Step 3: build coupling matrix \tilde{E}
@@ -905,6 +936,7 @@ def transformStandardSystemToWEBSelectiveDiagonalExtraction(
     diag_threshold: float = 1e-10,
     diag_nonzero_eps: float = 0.0,
     extension_strict: bool = True,
+    extension_method: str = "hollig_strict",
     print_max: int = 25,
 ):
     """Selective coupling-matrix transform based on the stiffness diagonal.
@@ -1006,16 +1038,30 @@ def transformStandardSystemToWEBSelectiveDiagonalExtraction(
     if len(extracted_outer) > 0:
         bspline_classification_sel = dict(bspline_classification)
         bspline_classification_sel["outer"] = list(extracted_outer)
-        extension_coeffs = computeExtensionCoefficientsHollig(
-            bspline_classification_sel,
-            p,
-            q,
-            debug=False,
-            strict=extension_strict,
-            element_types=element_types,
-            xDivision=xDivision,
-            yDivision=yDivision,
-        )
+        if extension_method not in ("hollig_strict", "collocation"):
+            raise ValueError("extension_method must be 'hollig_strict' or 'collocation'")
+        if extension_method == "hollig_strict":
+            if not extension_strict:
+                raise ValueError("Non-strict/fallback extension has been removed; use extension_strict=True")
+            extension_coeffs = computeExtensionCoefficientsHollig(
+                bspline_classification_sel,
+                p,
+                q,
+                debug=False,
+                strict=True,
+                element_types=element_types,
+                xDivision=xDivision,
+                yDivision=yDivision,
+            )
+        else:
+            extension_coeffs = computeExtensionCoefficientsCollocationLike(
+                bspline_classification_sel,
+                p,
+                q,
+                knotvector_x=knotvector_x,
+                knotvector_y=knotvector_y,
+                debug=False,
+            )
     else:
         extension_coeffs = {}
 

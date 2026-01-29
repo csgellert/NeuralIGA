@@ -294,28 +294,6 @@ class WeightFunction:
         """
         raise NotImplementedError("Subclasses must implement __call__")
 
-
-class DiscWeightFunction(WeightFunction):
-    """
-    Weight function for a unit disc centered at (0.5, 0.5) in [0,1]^2.
-    
-    w(x,y) = 1 - (2x-1)^2 - (2y-1)^2
-    D = {(x,y) : (x-0.5)^2 + (y-0.5)^2 < 0.25}
-    """
-    
-    def __call__(self, x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, ...]:
-        x = np.asarray(x, dtype=NP_DTYPE)
-        y = np.asarray(y, dtype=NP_DTYPE)
-        
-        w = 1 - (2 * x - 1) ** 2 - (2 * y - 1) ** 2
-        wx = -4 * (2 * x - 1)
-        wy = -4 * (2 * y - 1)
-        wxx = np.full_like(x, -8.0)
-        wyy = np.full_like(y, -8.0)
-        
-        return w, wx, wy, wxx, wyy
-
-
 class ShovelWeightFunction(WeightFunction):
     """
     Weight function for a 'shovel' shaped domain.

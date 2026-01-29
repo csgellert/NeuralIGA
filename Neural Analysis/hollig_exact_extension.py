@@ -1,17 +1,41 @@
-"""
-Exact Höllig extension coefficient computation.
+"""hollig_exact_extension
 
-This module implements the algebraic Lagrange polynomial method from:
-  Höllig, K., Reif, U., Wipper, J. (2001). "Weighted Extended B-Spline 
-  Approximation of Dirichlet Problems." Mathematics of Computation, 70(235), 51-63.
+Extension coefficient builders used by the WEB-spline solvers.
 
-For immersed geometries, uses a hybrid approach:
-  - Strict Höllig Lagrange formula when I(j) has inner neighbors
-  - Least-squares fitting to nearest neighbors otherwise
+This module provides two extension strategies:
+
+1) Strict Höllig extension (paper-faithful):
+     Uses the algebraic Lagrange polynomial method from:
+         Höllig, K., Reif, U., Wipper, J. (2001).
+         "Weighted Extended B-Spline Approximation of Dirichlet Problems."
+         Mathematics of Computation, 70(235), 51-63.
+
+2) Collocation-style extension (CwBS-style extraction):
+     Chooses a nearby (p+1)x(q+1) block of *inner* B-splines based on geometric
+     proximity of B-spline centers, then applies the same tensor-product Lagrange
+     coefficients.
+
+Note:
+        The previous nearest-neighbor fallback has been removed on purpose.
+        If strict Höllig conditions are not satisfied, strict mode raises.
 """
 
 import numpy as np
 from typing import Optional
+
+
+def _bspline_centers_1d(knotvector, p: int) -> np.ndarray:
+    """Compute 1D B-spline 'centers' as midpoints of their supports.
+
+    For a B-spline basis function with index i and degree p, the support is
+    [t_i, t_{i+p+1}] (open knot vector convention). We use its midpoint.
+    """
+    t = np.asarray(knotvector, dtype=float)
+    n_basis = len(t) - p - 1
+    if n_basis <= 0:
+        raise ValueError("Invalid knot vector / degree: no basis functions")
+    centers = 0.5 * (t[:n_basis] + t[p + 1 : p + 1 + n_basis])
+    return centers
 
 def _lagrange_coefficient_1d(i, j, alpha, p):
     """
@@ -156,32 +180,18 @@ def computeExtensionCoefficientsHollig(
     xDivision: Optional[int] = None,
     yDivision: Optional[int] = None,
 ):
+    """Compute strict Höllig extension coefficients for outer B-splines.
+
+    This implements the paper-faithful closest-index-array selection in index
+    space, with the additional strict requirement that the involved inner
+    basis functions have fully-inner support (see `_basis_support_fully_inner`).
+
+    The previous nearest-neighbor fallback has been removed.
     """
-    Compute extension coefficients for outer B-splines.
-    
-    Strategy:
-    1. Strict Höllig: If I(j) has inner neighbors, use exact Lagrange formula
-    2. Fallback: Use nearest neighbors with uniform weights (fast) or LS fit (slower, better)
-    
-    For immersed geometries, outer B-splines have limited support in the active domain.
-    Fallback weights are a heuristic that works reasonably well.
-    
-    Parameters:
-    -----------
-    bspline_classification : dict
-        Output from classifyBsplinesHollig()
-    p, q : int
-        B-spline degrees
-    debug : bool
-        If True, print debug information
-    use_ls_fit : bool
-        If True, use LS fitting with B-spline evaluations (requires Bsp* and knotvector_* params)
-        If False, use uniform weights (default, fast)
-    
-    Returns:
-    --------
-    dict : Extension coefficients
-    """
+    if use_ls_fit:
+        raise ValueError("use_ls_fit has been removed; only strict Höllig is supported")
+    if not strict:
+        raise ValueError("Non-strict/fallback extension has been removed; set strict=True")
     inner_set = set(bspline_classification['inner'])
     outer_bsplines = bspline_classification['outer']
     n_basis_x = bspline_classification['n_basis_x']
@@ -201,7 +211,6 @@ def computeExtensionCoefficientsHollig(
 
     extension_coeffs = {}
     n_with_hollig = 0
-    n_with_fallback = 0
 
     for outer_idx in outer_bsplines:
         j_x, j_y = outer_idx
@@ -245,50 +254,113 @@ def computeExtensionCoefficientsHollig(
                     if abs(e_ij) > 1e-14:
                         coeffs[inner_idx] = float(e_ij)
 
-        # Fallback to nearest neighbors for immersed geometry
         if len(coeffs) == 0:
-            if strict:
-                raise RuntimeError(
-                    "Strict WEB/Höllig mode failed: outer B-spline "
-                    f"{outer_idx} has no inner overlap in its closest-index-array window "
-                    f"(alpha_x={alpha_x}, p={p}; alpha_y={alpha_y}, q={q}). "
-                    "This typically happens in immersed geometries where the paper assumptions "
-                    "(availability of a fully-inside cell in the support) do not hold."
-                )
-            inner_list = list(inner_set)
-            
-            # Find nearest k inner B-splines
-            distances = [
-                ((i_x - j_x)**2 + (i_y - j_y)**2, (i_x, i_y)) 
-                for i_x, i_y in inner_list
-            ]
-            distances.sort()
-            
-            # Use p+q+1 neighbors
-            k_neighbors = max(3, min(p + q + 1, len(inner_list)))
-            nearest_indices = [idx for _, idx in distances[:k_neighbors]]
-            
-            # Use uniform weights for simplicity and speed
-            weight = 1.0 / len(nearest_indices)
-            for idx in nearest_indices:
-                coeffs[idx] = weight
-            
-            n_with_fallback += 1
-        else:
-            n_with_hollig += 1
+            raise RuntimeError(
+                "Strict WEB/Höllig mode failed: outer B-spline "
+                f"{outer_idx} has no valid strict inner block I(j). "
+                "This typically happens in immersed geometries where the paper assumptions "
+                "(availability of a fully-inside cell in the support) do not hold."
+            )
+        n_with_hollig += 1
 
         extension_coeffs[outer_idx] = coeffs
 
     if debug:
         print(f"      Strict Höllig: {n_with_hollig}/{len(outer_bsplines)}")
-        print(f"      Fallback:      {n_with_fallback}/{len(outer_bsplines)}")
-    
-    # Alert user if fallback was used significantly
-    if n_with_fallback > 0:
-        pct_fallback = 100.0 * n_with_fallback / len(outer_bsplines)
-        print(f"*** WARNING: {n_with_fallback}/{len(outer_bsplines)} outer B-splines ({pct_fallback:.1f}%) using nearest-neighbor fallback")
-        print(f"    Fallback indicates immersed geometry not ideal for Höllig method.")
-        print(f"    Consider using standard weighted IGA for better accuracy.")
+
+    return extension_coeffs
+
+
+def computeExtensionCoefficientsCollocationLike(
+    bspline_classification,
+    p: int,
+    q: int,
+    knotvector_x,
+    knotvector_y,
+    debug: bool = False,
+):
+    """Compute extension coefficients using the collocation_WEB-style extraction rule.
+
+    Key differences vs strict Höllig:
+      - Chooses I(j) as the *geometrically* closest (p+1)x(q+1) block whose
+        indices are all in the inner set (no full-support-inside requirement).
+      - Uses the same tensor-product Lagrange coefficients once I(j) is chosen.
+
+    This mirrors the selection logic used in collocation_WEB (CwBS programs).
+    """
+    inner_set = set(bspline_classification["inner"])
+    outer_bsplines = list(bspline_classification["outer"])
+    n_basis_x = int(bspline_classification["n_basis_x"])
+    n_basis_y = int(bspline_classification["n_basis_y"])
+
+    if n_basis_x <= p or n_basis_y <= q:
+        raise ValueError("Basis too small for the requested (p,q) block size")
+
+    # B-spline centers (midpoints of supports)
+    cx = _bspline_centers_1d(knotvector_x, p)
+    cy = _bspline_centers_1d(knotvector_y, q)
+
+    # Inner indicator grid
+    Btype_inner = np.zeros((n_basis_x, n_basis_y), dtype=bool)
+    for (i, j) in inner_set:
+        if 0 <= i < n_basis_x and 0 <= j < n_basis_y:
+            Btype_inner[i, j] = True
+
+    # Candidate (p+1)x(q+1) inner blocks
+    max_alpha_x = n_basis_x - (p + 1)
+    max_alpha_y = n_basis_y - (q + 1)
+    blocks = []
+    block_centers = []
+    for alpha_x in range(max_alpha_x + 1):
+        for alpha_y in range(max_alpha_y + 1):
+            if np.all(Btype_inner[alpha_x : alpha_x + p + 1, alpha_y : alpha_y + q + 1]):
+                blocks.append((alpha_x, alpha_y))
+                bx = float(np.mean(cx[alpha_x : alpha_x + p + 1]))
+                by = float(np.mean(cy[alpha_y : alpha_y + q + 1]))
+                block_centers.append((bx, by))
+
+    if len(blocks) == 0:
+        raise RuntimeError(
+            "Collocation-like extension failed: no fully-inner (p+1)x(q+1) index blocks exist. "
+            "Try refining the grid or using strict Höllig if applicable."
+        )
+
+    block_centers = np.asarray(block_centers, dtype=float)
+    bc_x = block_centers[:, 0]
+    bc_y = block_centers[:, 1]
+
+    extension_coeffs = {}
+    for (j_x, j_y) in outer_bsplines:
+        # Outer B-spline center
+        xj = float(cx[j_x])
+        yj = float(cy[j_y])
+
+        d2 = (bc_x - xj) ** 2 + (bc_y - yj) ** 2
+        k = int(np.argmin(d2))
+        alpha_x, alpha_y = blocks[k]
+
+        coeffs = {}
+        for i_x in range(alpha_x, alpha_x + p + 1):
+            e_x = _lagrange_coefficient_1d(i_x, j_x, alpha_x, p)
+            if e_x == 0.0:
+                continue
+            for i_y in range(alpha_y, alpha_y + q + 1):
+                e_y = _lagrange_coefficient_1d(i_y, j_y, alpha_y, q)
+                if e_y == 0.0:
+                    continue
+                coeff = float(e_x * e_y)
+                if abs(coeff) > 1e-14:
+                    coeffs[(i_x, i_y)] = coeff
+
+        if len(coeffs) == 0:
+            raise RuntimeError(
+                f"Collocation-like extension produced no coefficients for outer index {(j_x, j_y)} "
+                f"using alpha={(alpha_x, alpha_y)}."
+            )
+        extension_coeffs[(j_x, j_y)] = coeffs
+
+    if debug:
+        print(f"      Collocation-like: extended {len(extension_coeffs)}/{len(outer_bsplines)}")
 
     return extension_coeffs
 

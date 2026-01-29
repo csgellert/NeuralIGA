@@ -56,6 +56,10 @@ from FEM import solution_function as solution_function
 from FEM import solution_function_derivative_x as solution_function_derivative_x
 from FEM import solution_function_derivative_y as solution_function_derivative_y
 from FEM import dirichletBoundary_vectorized as dirichletBoundary
+from FEM import dirichletBoundaryDerivativeX_vectorized as dirichletBoundaryDerivativeX
+from FEM import dirichletBoundaryDerivativeY_vectorized as dirichletBoundaryDerivativeY
+from FEM import dirichletBoundaryDerivativeXX_vectorized as dirichletBoundaryDerivativeXX
+from FEM import dirichletBoundaryDerivativeYY_vectorized as dirichletBoundaryDerivativeYY
 from FEM import FUNCTION_CASE
 DOMAIN = {"x1": -1, "x2": 1, "y1": -1, "y2": 1}
 # =============================================================================
@@ -721,6 +725,11 @@ def collocation_2d(
     CD: Optional[Dict] = None,
     verbose: bool = True,
     domain: Optional[Dict[str, float]] = None,
+    g: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
+    gx: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
+    gy: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
+    gxx: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
+    gyy: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float, int, Dict]:
     """
     Solve -Δu = f on D: w(x,y) > 0, with u = 0 on ∂D.
@@ -763,27 +772,86 @@ def collocation_2d(
     """
     rtimes = {'sys': np.nan, 'ext': np.nan, 'sol': np.nan, 'total': np.nan}
     
+    # ---------------------------------------------------------------------
+    # Optional non-homogeneous Dirichlet handling via blended ansatz:
+    #   u(x,y) = w(x,y) * v_h(x,y) + (1 - w(x,y)) * g(x,y)
+    # where v_h is the WEB-spline approximation (coefficients solved by collocation).
+    # This reduces to the original homogeneous case when g ≡ 0.
+    #
+    # Collocation system remains on the unknown part -Δ(w * v_h), with modified RHS:
+    #   -Δ(w v_h) = f + Δ((1-w) g)
+    #
+    # Δ((1-w) g) = -(wxx+wyy) g - 2(wx gx + wy gy) + (1-w)(gxx+gyy)
+    # ---------------------------------------------------------------------
+
+    # Defaults for Dirichlet data: use FEM-prescribed boundary extension g(x,y).
+    # This reduces to the original homogeneous Dirichlet case when g ≡ 0.
+    if g is None:
+        g = dirichletBoundary
+        gx = dirichletBoundaryDerivativeX
+        gy = dirichletBoundaryDerivativeY
+        gxx = dirichletBoundaryDerivativeXX
+        gyy = dirichletBoundaryDerivativeYY
+    else:
+        # If the user supplies a custom g, require derivatives to avoid silently
+        # using unrelated defaults (which would change the PDE being solved).
+        if gx is None or gy is None or gxx is None or gyy is None:
+            raise ValueError(
+                "Non-homogeneous Dirichlet requires g and its derivatives gx, gy, gxx, gyy. "
+                "Either omit g to use FEM defaults, or provide all derivative callables."
+            )
+
     # Set up coordinate transformation and Laplacian scaling
     if domain is not None:
         scale_x = domain['x2'] - domain['x1']
         scale_y = domain['y2'] - domain['y1']
-        laplacian_scale = scale_x * scale_y  # = scale_x^2 if isotropic
-        
+        laplacian_scale = scale_x * scale_y  # equals scale_x^2 for isotropic mappings
+
         def transform_to_physical(x, y):
-            x_phys = domain['x1'] + x * scale_x
-            y_phys = domain['y1'] + y * scale_y
+            x_phys = domain['x1'] + np.asarray(x, dtype=NP_DTYPE) * scale_x
+            y_phys = domain['y1'] + np.asarray(y, dtype=NP_DTYPE) * scale_y
             return x_phys, y_phys
-        
-        # Wrap f to transform coordinates and scale Laplacian
+
+        # Wrap f to transform coordinates and scale the Laplacian (assumes isotropic intent)
         f_original = f
+
         def f_transformed(x, y):
             x_phys, y_phys = transform_to_physical(x, y)
             return laplacian_scale * f_original(x_phys, y_phys)
-        
+
         f = f_transformed
-        
+
+        # Wrap g and derivatives so they accept grid coordinates and return grid-derivatives
+        g_original = g
+        gx_original = gx
+        gy_original = gy
+        gxx_original = gxx
+        gyy_original = gyy
+
+        def g_wrapped(x, y):
+            x_phys, y_phys = transform_to_physical(x, y)
+            return g_original(x_phys, y_phys)
+
+        def gx_wrapped(x, y):
+            x_phys, y_phys = transform_to_physical(x, y)
+            return gx_original(x_phys, y_phys) * scale_x
+
+        def gy_wrapped(x, y):
+            x_phys, y_phys = transform_to_physical(x, y)
+            return gy_original(x_phys, y_phys) * scale_y
+
+        def gxx_wrapped(x, y):
+            x_phys, y_phys = transform_to_physical(x, y)
+            return gxx_original(x_phys, y_phys) * (scale_x ** 2)
+
+        def gyy_wrapped(x, y):
+            x_phys, y_phys = transform_to_physical(x, y)
+            return gyy_original(x_phys, y_phys) * (scale_y ** 2)
+
+        g, gx, gy, gxx, gyy = g_wrapped, gx_wrapped, gy_wrapped, gxx_wrapped, gyy_wrapped
+
         if verbose:
-            print(f"Domain transform: [0,1]² → [{domain['x1']},{domain['x2']}]×[{domain['y1']},{domain['y2']}]")
+            print(f"Domain transform: [0,1]² → [{domain['x1']},{domain['x2']}]×[{domain['y1']},{domain['y2']}]" )
             print(f"Laplacian scale factor: {laplacian_scale}")
     
     if n > 5:
@@ -1008,8 +1076,23 @@ def collocation_2d(
                 - 2 * H * (b10 * wxB + b01 * wyB)
             )
     
+    # -------------------------------------------------------------------------
     # Right-hand side
+    # For non-homogeneous Dirichlet blending, modify RHS by Δ((1-w)g)
+    # -------------------------------------------------------------------------
     F_rhs = f(xB, yB)
+    gB = g(xB, yB)
+    gxB = gx(xB, yB)
+    gyB = gy(xB, yB)
+    gxxB = gxx(xB, yB)
+    gyyB = gyy(xB, yB)
+
+    # Δ((1-w)g) = -(wxx+wyy) g - 2(wx gx + wy gy) + (1-w)(gxx+gyy)
+    F_rhs = F_rhs + (
+        -(wxxB + wyyB) * gB
+        - 2.0 * (wxB * gxB + wyB * gyB)
+        + (1.0 - wB_vals) * (gxxB + gyyB)
+    )
     
     # Convert G array to sparse matrix
     SG = array_to_matrix(G)
@@ -1095,8 +1178,11 @@ def collocation_2d(
     # In Python, we need to map back to the correct indices
     # The final Uxy should match xB, yB which are at indices indB-indB[0] in Uxy
     Uxy_result = Uxy[bw:bw + dim_B, bw:bw + dim_B]
+
+    # Add the prescribed boundary extension part: (1-w)g
+    Uxy_total = Uxy_result + (1.0 - wB_vals) * gB
     
-    return Uxy_result, xB, yB, con, dim_sys, rtimes
+    return Uxy_total, xB, yB, con, dim_sys, rtimes
 
 
 # =============================================================================
@@ -1335,13 +1421,19 @@ def visualize_solution(results: Dict, show_error: bool = True):
     
     w_grid, _, _, _, _ = wfct(xB, yB)
     mask = w_grid > 0
+
+    # Only visualize values inside the physical domain.
+    Uxy_plot = np.array(Uxy, copy=True)
+    uxy_exact_plot = np.array(uxy_exact, copy=True)
+    Uxy_plot[~mask] = np.nan
+    uxy_exact_plot[~mask] = np.nan
     
     if show_error:
         fig = plt.figure(figsize=(14, 5))
         
         # Numerical solution
         ax1 = fig.add_subplot(131, projection='3d')
-        ax1.plot_surface(xB, yB, Uxy, cmap='viridis', alpha=0.8)
+        ax1.plot_surface(xB, yB, Uxy_plot, cmap='viridis', alpha=0.8)
         ax1.set_xlabel('x')
         ax1.set_ylabel('y')
         ax1.set_zlabel('u')
@@ -1349,7 +1441,7 @@ def visualize_solution(results: Dict, show_error: bool = True):
         
         # Exact solution
         ax2 = fig.add_subplot(132, projection='3d')
-        ax2.plot_surface(xB, yB, uxy_exact, cmap='viridis', alpha=0.8)
+        ax2.plot_surface(xB, yB, uxy_exact_plot, cmap='viridis', alpha=0.8)
         ax2.set_xlabel('x')
         ax2.set_ylabel('y')
         ax2.set_zlabel('u')
@@ -1367,7 +1459,7 @@ def visualize_solution(results: Dict, show_error: bool = True):
     else:
         fig = plt.figure(figsize=(8, 6))
         ax = fig.add_subplot(111, projection='3d')
-        ax.plot_surface(xB, yB, Uxy, cmap='viridis', alpha=0.8)
+        ax.plot_surface(xB, yB, Uxy_plot, cmap='viridis', alpha=0.8)
         ax.set_xlabel('x')
         ax.set_ylabel('y')
         ax.set_zlabel('u')

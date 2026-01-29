@@ -15,12 +15,12 @@ NP_DTYPE = np.float64
 TORCH_DTYPE = torch.float64
 
 FUNCTION_CASE = 3
-MAX_SUBDIVISION = 4
+MAX_SUBDIVISION = 0
 #assert FUNCTION_CASE != 1
 # Pre-compute Gauss quadrature data to avoid repeated calculations
 _GAUSS_CACHE = {}
 DOMAIN = {"x1": -1, "x2": 1, "y1": -1, "y2": 1}
-
+#DOMAIN = {"x1": -4, "x2": 4, "y1": -3, "y2": 3}
 def _get_gauss_points(p):
     """Cache Gauss quadrature points and weights.
     
@@ -91,6 +91,21 @@ def load_function_vectorized(x, y):
     elif FUNCTION_CASE == 7: #double circle
         arg = (x**2 + y**2)*math.pi
         return 4*math.pi*np.cos(arg) -4*math.pi*arg*np.sin(arg)
+    elif FUNCTION_CASE == 8: # http://www.web-spline.de/examples/analytic/index.html
+        e = 1-(x**2)/16 -(y**2)/9
+        ex = -x/8
+        exx = -1/8
+        ey = -2*y/9
+        eyy = -2/9
+        k = x**2+1.5*x+y**2-y-3/16
+        kx = 2*x +1.5
+        kxx = 2
+        ky = 2*y -1
+        kyy = 2
+
+        tmp1 = -np.sin(e*k*0.5)*0.25*((ex*k + e*kx)**2 + (ey*k + e*ky)**2)
+        tmp2 = np.cos(e*k*0.5)*0.5*( (exx*k + 2*ex*kx + e*kxx) + (eyy*k + 2*ey*ky + e*kyy) )
+        return -(tmp1 + tmp2)
     else:
         raise NotImplementedError
 
@@ -108,6 +123,8 @@ def dirichletBoundary_vectorized(x, y):
         return np.zeros_like(x)
     elif FUNCTION_CASE == 7:
         return np.zeros_like(x)
+    elif FUNCTION_CASE == 8:
+        return np.zeros_like(x)
     else: 
         raise NotImplementedError
 
@@ -120,6 +137,8 @@ def dirichletBoundaryDerivativeX_vectorized(x, y):
     elif FUNCTION_CASE == 5:#L-shape
         return np.zeros_like(x)
     elif FUNCTION_CASE == 7:
+        return np.zeros_like(x)
+    elif FUNCTION_CASE ==8:
         return np.zeros_like(x)
     else: 
         raise NotImplementedError
@@ -134,8 +153,33 @@ def dirichletBoundaryDerivativeY_vectorized(x, y):
         return np.zeros_like(x)
     elif FUNCTION_CASE == 7:
         return np.zeros_like(x)
+    elif FUNCTION_CASE == 8:
+        return np.zeros_like(x)
     else: 
         raise NotImplementedError
+
+
+def dirichletBoundaryDerivativeXX_vectorized(x, y):
+        """Vectorized second derivative d²g/dx² of the prescribed Dirichlet data g(x,y).
+
+        Notes:
+        - For most existing FUNCTION_CASE values the Dirichlet data is either zero,
+            constant, or linear, hence the second derivatives are identically zero.
+        - This function is defined over the whole computational domain as an
+            extension of boundary data, which is required by the collocation_WEB
+            non-homogeneous Dirichlet formulation.
+        """
+        # All currently supported Dirichlet boundary functions are at most linear.
+        return np.zeros_like(x)
+
+
+def dirichletBoundaryDerivativeYY_vectorized(x, y):
+        """Vectorized second derivative d²g/dy² of the prescribed Dirichlet data g(x,y).
+
+        See dirichletBoundaryDerivativeXX_vectorized for notes.
+        """
+        # All currently supported Dirichlet boundary functions are at most linear.
+        return np.zeros_like(x)
 
 
 def solution_function(x,y):
@@ -151,6 +195,10 @@ def solution_function(x,y):
         return np.sin(2*np.pi*x)*np.sin(2*np.pi*y)
     elif FUNCTION_CASE == 7: #double circle
         return math.sin(math.pi*(x**2 + y**2))
+    elif FUNCTION_CASE ==8:
+        e = 1-(x**2)/16 -(y**2)/9
+        k = x**2+1.5*x+y**2-y-3/16
+        return np.sin(e*k*0.5)
     else: raise NotImplementedError
 def solution_function_derivative_x(x,y):
     if FUNCTION_CASE == 1:
@@ -162,7 +210,6 @@ def solution_function_derivative_x(x,y):
     elif FUNCTION_CASE == 3:
         return 3*x**2 + y**2 -1
     elif FUNCTION_CASE == 4:
-        raise NotImplementedError
         return 3*x**2 + y**2 -1 +1
     elif FUNCTION_CASE == 5: #L-shape
         return 2*np.pi*np.cos(2*np.pi*x)*np.sin(2*np.pi*y)
@@ -170,6 +217,12 @@ def solution_function_derivative_x(x,y):
         raise NotImplementedError
         arg = (x**2 + y**2)*math.pi
         return 2*math.pi*x*math.cos(arg)
+    elif FUNCTION_CASE ==8:
+        e = 1-(x**2)/16 -(y**2)/9
+        ex = -x/8
+        k = x**2+1.5*x+y**2-y-3/16
+        kx = 2*x +1.5
+        return 0.5*np.cos(e*k*0.5)*(ex*k + e*kx)
     else: raise NotImplementedError
 def solution_function_derivative_y(x,y):
     if FUNCTION_CASE == 1:
@@ -181,7 +234,6 @@ def solution_function_derivative_y(x,y):
     elif FUNCTION_CASE == 3:
         return 2*x*y
     elif FUNCTION_CASE == 4:
-        raise NotImplementedError
         return 2*x*y +2
     elif FUNCTION_CASE == 5: #L-shape
         return 2*np.pi*np.sin(2*np.pi*x)*np.cos(2*np.pi*y)
@@ -189,6 +241,12 @@ def solution_function_derivative_y(x,y):
         raise NotImplementedError
         arg = (x**2 + y**2)*math.pi
         return 2*math.pi*y*math.cos(arg)
+    elif FUNCTION_CASE ==8:
+        e = 1-(x**2)/16 -(y**2)/9
+        ey = -2*y/9
+        k = x**2+1.5*x+y**2-y-3/16
+        ky = 2*y -1
+        return 0.5*np.cos(e*k*0.5)*(ey*k + e*ky)
     else: raise NotImplementedError
 
 def element(model,p,q,knotvector_x, knotvector_y,i,j,Bspxi,Bspeta):
@@ -526,9 +584,17 @@ def assembly(K, F, Ke, Fe, elemx, elemy, p, q, xDivision, yDivision):
     return K, F
 
 def solveWeak(K, F):
-    """Optimized linear solver for sparse matrices with efficient zero-row detection"""
-    # Convert to csr format for efficient operations
-    K_csr = K.tocsr()
+    """Optimized linear solver for sparse matrices with efficient zero-row detection
+    
+    Handles both sparse matrices (from assembly) and dense arrays (if needed).
+    """
+    # Convert to csr format for efficient operations (or handle if already dense)
+    if sparse.issparse(K):
+        K_csr = K.tocsr()
+    else:
+        # K is a dense array - convert to sparse first
+        K_dense = np.asarray(K, dtype=NP_DTYPE)
+        K_csr = sparse.csr_matrix(K_dense)
     
     # Detect non-zero rows
     non_zero_rows = np.array(K_csr.getnnz(axis=1) > 0)

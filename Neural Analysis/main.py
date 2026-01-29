@@ -21,12 +21,12 @@ NP_DTYPE = np.float64
 #torch.set_default_dtype(torch.float64)
 
 #model = load_test_model("SIREN_circle", "SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 15.0, "w_hidden": 30.0})
-model = Geomertry.AnaliticalDistanceCircle()
-DIVISIONS = 50
-ORDER = 2
-DELTA = 0.005
-USE_WEB =False
-USE_WEB_TRANSFORM = False
+model = Geomertry.AnaliticalDistance_CASE8()
+DIVISIONS = 100
+ORDER = 3
+DELTA = 0.000
+USE_WEB = False
+USE_WEB_TRANSFORM = True
 USE_WEB_DIAG_EXTRACT = False
 assert sum([bool(USE_WEB), bool(USE_WEB_TRANSFORM), bool(USE_WEB_DIAG_EXTRACT)]) <= 1, \
     "USE_WEB / USE_WEB_TRANSFORM / USE_WEB_DIAG_EXTRACT are mutually exclusive"
@@ -45,7 +45,6 @@ NControl_w = len(knotvector_w)-q-1
 #mesh.plotAlayticHeatmap(FEM.solution_function)
 #mesh.plotDisctancefunction(model)
 Geomertry.init_spl(x,p,None,knotvector_u)
-
 # Use sparse matrix format (lil_matrix is efficient for construction)
 matrix_size = (xDivision+p+1)*(yDivision+q+1)
 K = sparse.lil_matrix((matrix_size, matrix_size), dtype=NP_DTYPE)
@@ -124,10 +123,14 @@ elif USE_WEB_TRANSFORM:
     result = FEM_WEB.solveWEB(K,F)
     print(f"Calculation time: {time.time()-start} ms")
     print(f"p={p}\tdiv = {xDivision}")
-    evaluation_WEB.plotErrorHeatmapWEB(model,result,knotvector_u,knotvector_w,p,q,bspline_classification=bsp_class,extended_basis=ext_basis)
-    evaluation_WEB.plotSolutionHeatmapWEB(model,result,knotvector_u,knotvector_w,p,q,bspline_classification=bsp_class,extended_basis=ext_basis,N=100)
     metrics = evaluation_WEB.evaluateAccuracyWEB(model, result, p, q, knotvector_u, knotvector_w, bspline_classification=bsp_class, extended_basis=ext_basis, N=10000, seed=42)
     evaluation_WEB.printErrorMetricsWEB(metrics)  # Pretty print all metrics
+    metrics = evaluation_WEB.computeL2andH1Errors(model, result, p, q, knotvector_u, knotvector_w,
+                               bspline_classification=bsp_class, extended_basis=ext_basis, N=2000, seed=42)
+    print("Len u:", len(result))
+    evaluation_WEB.printL2andH1Errors(metrics)
+    evaluation_WEB.plotSolutionHeatmapWEB(model,result,knotvector_u,knotvector_w,p,q,bspline_classification=bsp_class,extended_basis=ext_basis,N=100)
+    evaluation_WEB.plotErrorHeatmapWEB(model,result,knotvector_u,knotvector_w,p,q,bspline_classification=bsp_class,extended_basis=ext_basis)
 elif USE_WEB_DIAG_EXTRACT:
     print("Solving using selective diagonal-based extraction")
     result = FEM_WEB.solveWEB(K,F)
@@ -142,9 +145,11 @@ else:
     result = FEM.solveWeak(K,F)
     print(f"Calculation time: {time.time()-start} ms")
     print(f"p={p}\tdiv = {xDivision}")
-    evaluation.plotErrorHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=False,N=40)
+    #evaluation.plotErrorHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=False,N=40)
     #evaluation.plotResultHeatmap(model,result,knotvector_u,knotvector_w,p,q,larger_domain=FEM.LARGER_DOMAIN,N=50)
-    evaluation.visualizeResultsBspline(model,result,p,q,knotvector_u,knotvector_w)
+    #evaluation.visualizeResultsBspline(model,result,p,q,knotvector_u,knotvector_w)
 
     metrics = evaluation.evaluateAccuracy(model, result, p, q, knotvector_u, knotvector_w, N=10000, seed=42)
     evaluation.printErrorMetrics(metrics)  # Pretty print all metrics
+print(f"Function case: {FEM.FUNCTION_CASE}")
+print(f"TRF = {mesh.TRANSFORM}, gamma = {mesh.GAMMA_HOLLIG}, delta = {mesh.DELTA_HOLLIG}")

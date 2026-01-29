@@ -737,6 +737,142 @@ def evaluateAccuracyWEB(model, u_reduced, p, q, knotvector_x, knotvector_y,
     }
 
 
+
+def computeL2andH1Errors(model, u_reduced, p, q, knotvector_x, knotvector_y,
+                         bspline_classification, extended_basis, N=2000, seed=None):
+    """
+    Compute L2 and H1 errors of WEB-spline solution vs. analytical solution.
+    
+    Uses the standard definitions:
+        L2-error = sqrt(∫ (u - ũ)² d(x,y))
+        H1-error = sqrt(∫ (u - ũ)² + (∂/∂x(u - ũ))² + (∂/∂y(u - ũ))² d(x,y))
+    
+    where u is exact solution and ũ is approximate (WEB) solution.
+    
+    Parameters:
+    -----------
+    model : torch.nn.Module
+        Neural network model representing the geometry (SDF)
+    u_reduced : array-like
+        WEB-spline coefficients (inner DOFs only)
+    p, q : int
+        B-spline degrees
+    knotvector_x, knotvector_y : array-like
+        Knot vectors
+    bspline_classification : dict
+        Output from classifyBsplines()
+    extended_basis : dict
+        Output from buildExtendedBasis()
+    N : int
+        Number of random evaluation points (default 2000)
+    seed : int, optional
+        Random seed for reproducibility
+    
+    Returns:
+    --------
+    dict : Dictionary containing:
+        - 'L2_error': L2 norm of the error
+        - 'H1_error': H1 norm of the error
+        - 'H1_seminorm': H1 seminorm (gradient part only)
+        - 'n_valid_points': Number of valid points inside domain
+    """
+    if seed is not None:
+        np.random.seed(seed)
+    
+    # Generate random points in the domain
+    x_samples = np.random.uniform(FEM.DOMAIN["x1"], FEM.DOMAIN["x2"], N)
+    y_samples = np.random.uniform(FEM.DOMAIN["y1"], FEM.DOMAIN["y2"], N)
+    
+    # Evaluate distances to check which points are inside domain
+    points_tensor = torch.tensor(np.column_stack([x_samples, y_samples]), dtype=TORCH_DTYPE)
+    
+    with torch.no_grad():
+        distances = model(points_tensor).numpy().flatten()
+    
+    # Filter to points inside domain (d >= 0)
+    inside_mask = distances >= 0
+    x_inside = x_samples[inside_mask]
+    y_inside = y_samples[inside_mask]
+    n_valid = len(x_inside)
+    
+    if n_valid == 0:
+        print("ERROR: No valid points inside domain!")
+        return {
+            'L2_error': np.nan,
+            'H1_error': np.nan,
+            'H1_seminorm': np.nan,
+            'n_valid_points': 0
+        }
+    
+    # Accumulate error contributions using Riemann sum approximation
+    # The domain Ω has approximate area we need to normalize by
+    domain_area = (FEM.DOMAIN["x2"] - FEM.DOMAIN["x1"]) * (FEM.DOMAIN["y2"] - FEM.DOMAIN["y1"])
+    
+    # Evaluate numerical solution and its derivatives at valid points
+    u_numerical = np.zeros(n_valid)
+    du_numerical_dx = np.zeros(n_valid)
+    du_numerical_dy = np.zeros(n_valid)
+    
+    for idx in range(n_valid):
+        xx, yy = x_inside[idx], y_inside[idx]
+        
+        u_numerical[idx] = FEM_WEB.reconstructSolution(
+            xx, yy, u_reduced, model, p, q, knotvector_x, knotvector_y,
+            bspline_classification, extended_basis
+        )
+        
+        du_dx, du_dy = FEM_WEB.reconstructSolutionGradient(
+            xx, yy, u_reduced, model, p, q, knotvector_x, knotvector_y,
+            bspline_classification, extended_basis
+        )
+        du_numerical_dx[idx] = du_dx
+        du_numerical_dy[idx] = du_dy
+    
+    # Evaluate exact solution and its derivatives at valid points
+    u_exact = np.array([FEM.solution_function(x, y) for x, y in zip(x_inside, y_inside)])
+    du_exact_dx = np.array([FEM.solution_function_derivative_x(x, y) for x, y in zip(x_inside, y_inside)])
+    du_exact_dy = np.array([FEM.solution_function_derivative_y(x, y) for x, y in zip(x_inside, y_inside)])
+    
+    # Compute errors
+    error_u = u_numerical - u_exact
+    error_du_dx = du_numerical_dx - du_exact_dx
+    error_du_dy = du_numerical_dy - du_exact_dy
+    
+    # Compute L2 error: sqrt(mean((u - u_exact)^2)) * sqrt(domain_area)
+    L2_error_squared = np.mean(error_u ** 2) * domain_area
+    L2_error = np.sqrt(L2_error_squared)
+    
+    # Compute H1 error: sqrt(mean((u - u_exact)^2 + (du/dx)^2 + (du/dy)^2)) * sqrt(domain_area)
+    H1_integrand = error_u ** 2 + error_du_dx ** 2 + error_du_dy ** 2
+    H1_error_squared = np.mean(H1_integrand) * domain_area
+    H1_error = np.sqrt(H1_error_squared)
+    
+    # Compute H1 seminorm (gradient part only)
+    H1_seminorm_integrand = error_du_dx ** 2 + error_du_dy ** 2
+    H1_seminorm_squared = np.mean(H1_seminorm_integrand) * domain_area
+    H1_seminorm = np.sqrt(H1_seminorm_squared)
+    
+    return {
+        'L2_error': L2_error,
+        'H1_error': H1_error,
+        'H1_seminorm': H1_seminorm,
+        'n_valid_points': n_valid
+    }
+
+
+def printL2andH1Errors(metrics):
+    """Pretty print the L2 and H1 error metrics."""
+    print("=" * 60)
+    print("WEB-Splines Accuracy: L2 and H1 Error Norms")
+    print("=" * 60)
+    print(f"  Evaluation points inside domain: {metrics['n_valid_points']}")
+    print()
+    print(f"  L2-error   = ‖u - ũ‖_L2    = {metrics['L2_error']:.6e}")
+    print(f"  H1-error   = ‖u - ũ‖_H1    = {metrics['H1_error']:.6e}")
+    print(f"  H1-seminorm= |u - ũ|_H1    = {metrics['H1_seminorm']:.6e}")
+    print("=" * 60)
+
+
 def printErrorMetricsWEB(metrics):
     """Pretty print the error metrics."""
     print("=" * 50)

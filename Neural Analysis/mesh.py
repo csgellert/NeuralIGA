@@ -12,8 +12,8 @@ USE_SIGMOID_FOR_DISTANCE = False
 TRANSFORM = None  # Options: "sigmoid", "tanh", "hollig", None
 #if TRANSFORM == "trapezoid": raise NameError("Trapezoid transform is not recommended, use sigmoid or tanh instead")
 TANG = 1  # Used for trapezoid transform, adjust as needed
-DELTA_HOLLIG = 0.2  # Controls the width of the strip for Höllig weight function
-GAMMA_HOLLIG = 3  # Controls the smoothness for Höllig weight function
+DELTA_HOLLIG = 1  # Controls the width of the strip for Höllig weight function
+GAMMA_HOLLIG = 5  # Controls the smoothness for Höllig weight function
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     assert x0 < x1 and y0 < y1
     knotvector_u = np.linspace(x0,x1,xDivision+2)
@@ -81,7 +81,7 @@ def distance_with_derivative(x,y,model,transform=TRANSFORM):
         mask = d.squeeze()*TANG > 1
         dx = torch.where(mask, torch.tensor(0.0, dtype=TORCH_DTYPE), dx * TANG)
         dy = torch.where(mask, torch.tensor(0.0, dtype=TORCH_DTYPE), dy * TANG)
-    elif transform == "hollig":
+    elif transform and transform.lower() == "hollig":
         dw_dd = hollig_weight_derivative(d)
         dx = dw_dd * dx
         dy = dw_dd * dy
@@ -116,7 +116,7 @@ def distance_with_derivative_vect_trasformed(x,y,model,transform=TRANSFORM):
         mask = d.squeeze()*TANG > 1
         dx = torch.where(mask, torch.tensor(0.0, dtype=TORCH_DTYPE), dx * TANG)
         dy = torch.where(mask, torch.tensor(0.0, dtype=TORCH_DTYPE), dy * TANG)
-    elif transform == "hollig":
+    elif transform and transform.lower() == "hollig":
         dw_dd = hollig_weight_derivative(d).view(-1)
         dx = dw_dd * dx
         dy = dw_dd * dy

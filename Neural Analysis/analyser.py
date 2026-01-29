@@ -65,17 +65,19 @@ def save_simulation_results(filename, mdl_name, test_values, orders, all_eval_st
 
 #mdl_name = "SIREN_circle_1_4" #! check network params!!
 #model = load_test_model(mdl_name, type="SIREN", params={"architecture": [2, 256, 256, 256, 1], "w_0": 8.0, "w_hidden": 8.0})
-mdl_name = "AnalyticalDistance_Circle_WEB"
-model = Geomertry.AnaliticalDistanceCircle()
+mdl_name = "AnalyticalDistance_Case8_WEB_trf"
+#model = Geomertry.AnaliticalDistanceCircle()
 #model = Geomertry.AnaliticalDistanceLshape()
-USE_WEB = True
+model = Geomertry.AnaliticalDistance_CASE8()
+USE_WEB = False
+USE_WEB_TRANSFORM = True
 WEB_ADAPTIVE = False
 DIAG_TRSH = 1e-9
 assert not (USE_WEB and WEB_ADAPTIVE), "USE_WEB and WEB_ADAPTIVE are mutually exclusive"
 
 
-test_values = [10, 20, 50, 80,95,100,105,120]
-orders = [1, 2, 3]
+test_values = [20,30, 50, 80,100,120,150]
+orders = [2]
 
 esize = [1/(nd+1) for nd in test_values]
 
@@ -138,6 +140,33 @@ for order in orders:
             results_v2 = E_tilde.T @ result
             eval_stats = evaluation.evaluateAccuracy(model, results_v2, p, q, knotvector_u, knotvector_w, N=10000, seed=42)
             evaluation.printErrorMetrics(eval_stats)  # Pretty print all metrics
+        elif USE_WEB_TRANSFORM:
+            print("Assembling using standard weighted B-splines")
+            K, F, etype = FEM.processAllElements(model, p, q, knotvector_u, knotvector_w, 
+                                          xDivision, yDivision, K, F)
+            print("Applying WEB coupling matrix transform (Eq. 8.9)")
+            K, F, etype, bsp_class, ext_basis, E_tilde = FEM_WEB.transformStandardSystemToWEB(
+                K,
+                F,
+                model,
+                p,
+                q,
+                knotvector_u,
+                knotvector_w,
+                xDivision,
+                yDivision,
+                extension_strict=True,
+                web_use_weight_normalization=True,
+                web_ref_weight_eps=1e-6,
+            )
+            print("Solving using WEB transform")
+            result = FEM_WEB.solveWEB(K,F)
+            metrics = evaluation_WEB.evaluateAccuracyWEB(model, result, p, q, knotvector_u, knotvector_w, bspline_classification=bsp_class, extended_basis=ext_basis, N=10000, seed=42)
+            evaluation_WEB.printErrorMetricsWEB(metrics)  # Pretty print all metrics
+            metrics2 = evaluation_WEB.computeL2andH1Errors(model, result, p, q, knotvector_u, knotvector_w,
+                                    bspline_classification=bsp_class, extended_basis=ext_basis, N=2000, seed=42)
+            print("Len u:", len(result))
+            evaluation_WEB.printL2andH1Errors(metrics2)
         else:
             K, F, etype = FEM.processAllElements(model, p, q, knotvector_u, knotvector_w, xDivision, yDivision, K, F)
 

@@ -158,19 +158,12 @@ def _compute_inner_reference_weights_from_inner_elements(
 
     pts = np.asarray([ref_points[idx] for idx in inner_bsplines], dtype=NP_DTYPE)
 
-    # Evaluate w(x_i) in one batch.
-    device = torch.device('cpu')
-    try:
-        params = list(model.parameters())
-        if len(params) > 0:
-            device = params[0].device
-    except Exception:
-        pass
-
-    pts_tensor = torch.tensor(pts, dtype=TORCH_DTYPE, device=device)
-    with torch.no_grad():
-        w_tensor = model(pts_tensor).view(-1)
-
+    # Evaluate w(x_i) using vectorized mesh function (ignore derivatives)
+    x_coords = pts[:, 0]
+    y_coords = pts[:, 1]
+    w_tensor, _, _ = mesh.distance_with_derivative_vect_trasformed(
+        x_coords, y_coords, model, transform=mesh.TRANSFORM
+    )
     w = w_tensor.detach().cpu().numpy().astype(NP_DTYPE, copy=False)
 
     if np.any(~np.isfinite(w)):
@@ -594,12 +587,17 @@ def classifyAllElementsWEB(model, p, q, knotvector_x, knotvector_y, xDivision, y
             all_corners.extend([[x1, y1], [x2, y1], [x1, y2], [x2, y2]])
             elem_coords.append((elemx, elemy, x1, x2, y1, y2))
     
-    corners_tensor = torch.tensor(all_corners, dtype=TORCH_DTYPE)
-    with torch.no_grad():
-        all_distances = model(corners_tensor).view(-1, 4)
+    # Evaluate distances at corners using vectorized mesh function (ignore derivatives)
+    all_corners_array = np.array(all_corners)
+    x_coords = all_corners_array[:, 0]
+    y_coords = all_corners_array[:, 1]
+    distances_flat, _, _ = mesh.distance_with_derivative_vect_trasformed(
+        x_coords, y_coords, model, transform=mesh.TRANSFORM
+    )
+    all_distances = distances_flat.view(-1, 4)
     
-    min_d = all_distances.min(dim=1).values.numpy()
-    max_d = all_distances.max(dim=1).values.numpy()
+    min_d = all_distances.min(dim=1).values.detach().numpy()
+    max_d = all_distances.max(dim=1).values.detach().numpy()
     
     inner_mask = min_d >= 0
     outer_mask = max_d < 0
@@ -1067,12 +1065,19 @@ def transformStandardSystemToWEBSelectiveDiagonalExtraction(
 
 def solveWEB(K, F):
     """
-    Solve the WEB-spline system using sparse matrix format.
+    Solve the WEB-spline system using sparse or dense matrix format.
     
     Since we only have inner DOFs, the system should be well-conditioned.
+    Handles both sparse matrices (from processAllElementsWEB) and dense arrays
+    (from matrix transformation functions).
     """
-    # Convert to csr format for efficient operations
-    K_csr = K.tocsr()
+    # Convert to csr format for efficient operations (or handle if already dense)
+    if sparse.issparse(K):
+        K_csr = K.tocsr()
+    else:
+        # K is a dense array (from transformation functions)
+        K_dense = np.asarray(K, dtype=NP_DTYPE)
+        K_csr = sparse.csr_matrix(K_dense)
     
     # Check for zero rows (shouldn't happen with WEB-splines, but be safe)
     non_zero_rows = np.array(K_csr.getnnz(axis=1) > 0)

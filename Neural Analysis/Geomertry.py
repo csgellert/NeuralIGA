@@ -288,6 +288,14 @@ class AnaliticalDistanceLshape(nn.Module):
       plt.title('Contour plot of distance function')
       plt.show()
 
+class AnaliticalDistance_CASE8(nn.Module):
+   def __init__(self):
+      super().__init__()
+
+   def forward(self, crd):
+      e = 1-(crd[...,0]**2)/16 -(crd[...,1]**2)/9
+      k = crd[...,0]**2+1.5*crd[...,0]+crd[...,1]**2-crd[...,1]-3/16
+      return e*k
 
 class AnaliticalDistanceLshape_RFunction(nn.Module):
    """Smooth L-shape distance using Rvachev R-functions.

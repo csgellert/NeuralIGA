@@ -1382,8 +1382,198 @@ def reconstructSolutionGradient(x, y, u_reduced, model, p, q, knotvector_x, knot
     # Gradient using product rule
     du_dx = dx_d * (bspline_sum - g) + d * bspline_sum_dx + (1 - d) * dg_dx
     du_dy = dy_d * (bspline_sum - g) + d * bspline_sum_dy + (1 - d) * dg_dy
-    
+
     return du_dx, du_dy
+
+
+def reconstructSolutionHessianDiag(x, y, u_reduced, model, p, q, knotvector_x, knotvector_y,
+                                   bspline_classification, extended_basis):
+    """
+    Reconstruct solution value, gradient, and diagonal Hessian entries at (x, y).
+
+    The WEB solution is  u = d * S + (1-d) * g  where S = sum_i c_i B_i^e.
+    Applying the product rule twice gives::
+
+        du/dx   =  d_x S + d S_x  +  (1-d) g_x - d_x g
+        d²u/dx² =  d_xx S + 2 d_x S_x + d S_xx
+                    + (1-d) g_xx - 2 d_x g_x  - d_xx g
+
+    (analogous for y).
+
+    Parameters
+    ----------
+    x, y : float or array-like
+        Evaluation point(s). If arrays are given, each element is evaluated
+        independently and the results are returned as NumPy arrays.
+    u_reduced : array
+        WEB-spline solution coefficients (inner DOFs only).
+    model : torch.nn.Module
+        Geometry / distance model.
+    p, q : int
+        B-spline degrees.
+    knotvector_x, knotvector_y : array
+        Knot vectors.
+    bspline_classification : dict
+        Classification produced by ``transformStandardSystemToWEB``.
+    extended_basis : dict
+        Extended basis produced by ``transformStandardSystemToWEB``.
+
+    Returns
+    -------
+    u, du_dx, du_dy, d2u_dx2, d2u_dy2 : float or np.ndarray
+        Solution value, first, and second partial derivatives at (x, y).
+        Returns scalars when x, y are scalars; arrays when x, y are arrays.
+    """
+    # --- Handle array inputs by dispatching point-by-point ---
+    x_arr = np.asarray(x, dtype=np.float64)
+    y_arr = np.asarray(y, dtype=np.float64)
+    if x_arr.ndim >= 1 and x_arr.size > 1:
+        x_flat = x_arr.ravel()
+        y_flat = y_arr.ravel()
+        n = x_flat.size
+        out_u = np.zeros(n, dtype=np.float64)
+        out_ux = np.zeros(n, dtype=np.float64)
+        out_uy = np.zeros(n, dtype=np.float64)
+        out_uxx = np.zeros(n, dtype=np.float64)
+        out_uyy = np.zeros(n, dtype=np.float64)
+        for k in range(n):
+            out_u[k], out_ux[k], out_uy[k], out_uxx[k], out_uyy[k] = \
+                _reconstructSolutionHessianDiag_scalar(
+                    float(x_flat[k]), float(y_flat[k]), u_reduced, model, p, q,
+                    knotvector_x, knotvector_y, bspline_classification, extended_basis,
+                )
+        shape = x_arr.shape
+        return (out_u.reshape(shape), out_ux.reshape(shape), out_uy.reshape(shape),
+                out_uxx.reshape(shape), out_uyy.reshape(shape))
+
+    # Scalar path
+    return _reconstructSolutionHessianDiag_scalar(
+        float(x_arr), float(y_arr), u_reduced, model, p, q,
+        knotvector_x, knotvector_y, bspline_classification, extended_basis,
+    )
+
+
+def _reconstructSolutionHessianDiag_scalar(
+    x, y, u_reduced, model, p, q, knotvector_x, knotvector_y,
+    bspline_classification, extended_basis,
+):
+    """Scalar (single-point) implementation of reconstructSolutionHessianDiag."""
+    from FEM import (
+        _eval_weight_and_hessian_diag_np,
+        dirichletBoundary_vectorized,
+        dirichletBoundaryDerivativeX_vectorized,
+        dirichletBoundaryDerivativeY_vectorized,
+        dirichletBoundaryDerivativeXX_vectorized,
+        dirichletBoundaryDerivativeYY_vectorized,
+    )
+
+    # ---- distance d and its derivatives up to second order ----
+    d_val, dx_d, dy_d, dxx_d, dyy_d = _eval_weight_and_hessian_diag_np(
+        np.float64(x), np.float64(y), model, transform=mesh.TRANSFORM,
+    )
+    d_val = float(d_val)
+    dx_d = float(dx_d)
+    dy_d = float(dy_d)
+    dxx_d = float(dxx_d)
+    dyy_d = float(dyy_d)
+
+    if d_val < 0:
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+
+    # ---- B-spline evaluations up to second derivative ----
+    Bspxi, Bspeta = _get_bspline_objects(knotvector_x, knotvector_y, p, q)
+    bxi = Bspxi(x)
+    beta = Bspeta(y)
+    dbxi = Bspxi.diff(1)(x)
+    dbeta = Bspeta.diff(1)(y)
+    d2bxi = Bspxi.diff(2)(x)
+    d2beta = Bspeta.diff(2)(y)
+
+    n_basis_x = bspline_classification['n_basis_x']
+    n_basis_y = bspline_classification['n_basis_y']
+    inner_bsplines = bspline_classification['inner']
+
+    # Accumulate extended B-spline sums: S, S_x, S_y, S_xx, S_yy
+    S = 0.0
+    S_x = 0.0
+    S_y = 0.0
+    S_xx = 0.0
+    S_yy = 0.0
+
+    use_norm = bool(bspline_classification.get('web_use_weight_normalization', False))
+    ref_weights = bspline_classification.get('inner_reference_weights') if use_norm else None
+
+    for reduced_idx, inner_idx in enumerate(inner_bsplines):
+        coeff = u_reduced[reduced_idx]
+        basis_coeffs = extended_basis[inner_idx]
+
+        Be = 0.0
+        dBe_x = 0.0
+        dBe_y = 0.0
+        d2Be_xx = 0.0
+        d2Be_yy = 0.0
+
+        for (bi, bj), ecoeff in basis_coeffs.items():
+            if bi < n_basis_x and bj < n_basis_y:
+                bx = bxi[bi]
+                by = beta[bj]
+                dbx = dbxi[bi]
+                dby = dbeta[bj]
+                d2bx = d2bxi[bi]
+                d2by = d2beta[bj]
+
+                Be += ecoeff * bx * by
+                dBe_x += ecoeff * dbx * by
+                dBe_y += ecoeff * bx * dby
+                d2Be_xx += ecoeff * d2bx * by
+                d2Be_yy += ecoeff * bx * d2by
+
+        if use_norm:
+            w_i = ref_weights.get(inner_idx) if ref_weights is not None else None
+            if w_i is None:
+                raise RuntimeError(
+                    "WEB normalization enabled but missing w(x_i) for inner index "
+                    f"{inner_idx}."
+                )
+            inv_w = 1.0 / float(w_i)
+            Be *= inv_w
+            dBe_x *= inv_w
+            dBe_y *= inv_w
+            d2Be_xx *= inv_w
+            d2Be_yy *= inv_w
+
+        S += coeff * Be
+        S_x += coeff * dBe_x
+        S_y += coeff * dBe_y
+        S_xx += coeff * d2Be_xx
+        S_yy += coeff * d2Be_yy
+
+    # ---- Dirichlet data and derivatives ----
+    def _to_float(v):
+        if hasattr(v, 'item'):
+            return v.item()
+        if isinstance(v, np.ndarray):
+            return float(v.flat[0]) if v.size > 0 else float(v)
+        return float(v)
+
+    g = _to_float(dirichletBoundary_vectorized(x, y))
+    gx = _to_float(dirichletBoundaryDerivativeX_vectorized(x, y))
+    gy = _to_float(dirichletBoundaryDerivativeY_vectorized(x, y))
+    gxx = _to_float(dirichletBoundaryDerivativeXX_vectorized(x, y))
+    gyy = _to_float(dirichletBoundaryDerivativeYY_vectorized(x, y))
+
+    # ---- Assemble u = d * S + (1-d) * g ----
+    u = d_val * S + (1.0 - d_val) * g
+
+    # ---- First derivatives (product rule) ----
+    du_dx = dx_d * (S - g) + d_val * S_x + (1.0 - d_val) * gx
+    du_dy = dy_d * (S - g) + d_val * S_y + (1.0 - d_val) * gy
+
+    # ---- Second derivatives (product rule applied twice) ----
+    d2u_dx2 = dxx_d * (S - g) + 2.0 * dx_d * (S_x - gx) + d_val * S_xx + (1.0 - d_val) * gxx
+    d2u_dy2 = dyy_d * (S - g) + 2.0 * dy_d * (S_y - gy) + d_val * S_yy + (1.0 - d_val) * gyy
+
+    return u, du_dx, du_dy, d2u_dx2, d2u_dy2
 
 
 # =============================================================================

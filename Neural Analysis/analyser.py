@@ -76,8 +76,8 @@ DIAG_TRSH = 1e-9
 assert not (USE_WEB and WEB_ADAPTIVE), "USE_WEB and WEB_ADAPTIVE are mutually exclusive"
 
 
-test_values = [20,30, 50, 80,100,120,150]
-orders = [2]
+test_values = [20,30,50,80,100,120]
+orders = [1,2,3]
 
 esize = [1/(nd+1) for nd in test_values]
 
@@ -161,12 +161,14 @@ for order in orders:
             )
             print("Solving using WEB transform")
             result = FEM_WEB.solveWEB(K,F)
-            metrics = evaluation_WEB.evaluateAccuracyWEB(model, result, p, q, knotvector_u, knotvector_w, bspline_classification=bsp_class, extended_basis=ext_basis, N=10000, seed=42)
-            evaluation_WEB.printErrorMetricsWEB(metrics)  # Pretty print all metrics
+            eval_stats = evaluation_WEB.evaluateAccuracyWEB(model, result, p, q, knotvector_u, knotvector_w, bspline_classification=bsp_class, extended_basis=ext_basis, N=10000, seed=42)
+            evaluation_WEB.printErrorMetricsWEB(eval_stats)  # Pretty print all metrics
             metrics2 = evaluation_WEB.computeL2andH1Errors(model, result, p, q, knotvector_u, knotvector_w,
                                     bspline_classification=bsp_class, extended_basis=ext_basis, N=2000, seed=42)
             print("Len u:", len(result))
             evaluation_WEB.printL2andH1Errors(metrics2)
+            # Merge L2/H1 metrics into eval_stats
+            eval_stats.update(metrics2)
         else:
             K, F, etype = FEM.processAllElements(model, p, q, knotvector_u, knotvector_w, xDivision, yDivision, K, F)
 

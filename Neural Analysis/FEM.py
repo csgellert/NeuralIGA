@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import mesh
 import math
 import torch
+from typing import Optional, Tuple
 from bspline import Bspline
 from tqdm import tqdm
 from scipy import sparse
@@ -14,11 +15,115 @@ torch.set_default_dtype(torch.float64)
 NP_DTYPE = np.float64
 TORCH_DTYPE = torch.float64
 
-FUNCTION_CASE = 3
-MAX_SUBDIVISION = 0
+FUNCTION_CASE = 5
+MAX_SUBDIVISION = 2
 #assert FUNCTION_CASE != 1
 # Pre-compute Gauss quadrature data to avoid repeated calculations
 _GAUSS_CACHE = {}
+
+# Active geometry model used by manufactured testcases (set inside GaussQuadrature).
+ACTIVE_MODEL: Optional[torch.nn.Module] = None
+
+
+def _transform_scalar_and_derivs(
+    d_raw: torch.Tensor, transform: Optional[str]
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return (w, T'(d), T''(d)) for supported transforms.
+
+    This mirrors mesh.distance_with_derivative_vect_trasformed for the *value*.
+    We additionally provide second derivatives wrt the scalar argument so we can
+    compute w_xx, w_yy via chain rule.
+    """
+    if transform is None:
+        w = d_raw
+        tp = torch.ones_like(d_raw)
+        tpp = torch.zeros_like(d_raw)
+        return w, tp, tpp
+
+    t = str(transform).lower()
+    if t == "sigmoid":
+        w = 1.0 / (1.0 + torch.exp(-d_raw))
+        tp = w * (1.0 - w)
+        tpp = tp * (1.0 - 2.0 * w)
+        return w, tp, tpp
+    if t == "tanh":
+        w = torch.tanh(d_raw)
+        tp = 1.0 - w * w
+        tpp = -2.0 * w * tp
+        return w, tp, tpp
+    if t == "logarithmic":
+        w = torch.log(d_raw + 1.0)
+        tp = 1.0 / (d_raw + 1.0)
+        tpp = -1.0 / (d_raw + 1.0) ** 2
+        return w, tp, tpp
+    if t == "exponential":
+        expd = torch.exp(d_raw)
+        w = expd - 1.0
+        tp = expd
+        tpp = expd
+        return w, tp, tpp
+
+    raise NotImplementedError(
+        f"Second-derivative manufactured cases do not support transform={transform!r}. "
+        "Use TRANSFORM=None or one of: None, 'sigmoid', 'tanh', 'logarithmic', 'exponential'."
+    )
+
+
+def _eval_weight_and_hessian_diag_np(
+    x: np.ndarray,
+    y: np.ndarray,
+    model: torch.nn.Module,
+    transform: Optional[str],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Evaluate transformed weight w and derivatives (wx, wy, wxx, wyy) at points.
+
+    Uses autograd on the given ``model``.
+    """
+    x_arr, y_arr = np.broadcast_arrays(np.asarray(x, dtype=NP_DTYPE), np.asarray(y, dtype=NP_DTYPE))
+    out_shape = x_arr.shape
+    x_np = x_arr.reshape(-1)
+    y_np = y_arr.reshape(-1)
+    crd = torch.tensor(np.stack([x_np, y_np], axis=1), dtype=TORCH_DTYPE, requires_grad=True)
+
+    d_raw = model(crd).reshape(-1)
+    grad = torch.autograd.grad(
+        outputs=d_raw,
+        inputs=crd,
+        grad_outputs=torch.ones_like(d_raw),
+        create_graph=True,
+        retain_graph=True,
+    )[0]
+    dx_raw = grad[:, 0]
+    dy_raw = grad[:, 1]
+
+    dxx_raw = torch.autograd.grad(
+        outputs=dx_raw,
+        inputs=crd,
+        grad_outputs=torch.ones_like(dx_raw),
+        create_graph=False,
+        retain_graph=True,
+    )[0][:, 0]
+    dyy_raw = torch.autograd.grad(
+        outputs=dy_raw,
+        inputs=crd,
+        grad_outputs=torch.ones_like(dy_raw),
+        create_graph=False,
+        retain_graph=False,
+    )[0][:, 1]
+
+    w, tp, tpp = _transform_scalar_and_derivs(d_raw, transform)
+
+    wx = tp * dx_raw
+    wy = tp * dy_raw
+    wxx = tpp * (dx_raw ** 2) + tp * dxx_raw
+    wyy = tpp * (dy_raw ** 2) + tp * dyy_raw
+
+    w_np = w.detach().cpu().numpy().reshape(out_shape)
+    wx_np = wx.detach().cpu().numpy().reshape(out_shape)
+    wy_np = wy.detach().cpu().numpy().reshape(out_shape)
+    wxx_np = wxx.detach().cpu().numpy().reshape(out_shape)
+    wyy_np = wyy.detach().cpu().numpy().reshape(out_shape)
+    return (w_np, wx_np, wy_np, wxx_np, wyy_np)
 
 
 def get_domain_for_case(function_case: int) -> dict:
@@ -28,10 +133,13 @@ def get_domain_for_case(function_case: int) -> dict:
         - Case 0 matches the original WEB-spline disc example defined on [0,1]^2.
         - Cases 1..7 use the [-1,1]^2 box.
         - Case 8 uses the [-4,4]x[-3,3] box.
+        - Cases 9..10 use the [-1,1]^2 box (triangle, pentagon).
     """
     if function_case == 0:
         return {"x1": 0.0, "x2": 1.0, "y1": 0.0, "y2": 1.0}
     if 1 <= function_case <= 7:
+        return {"x1": -1.0, "x2": 1.0, "y1": -1.0, "y2": 1.0}
+    if 9 <= function_case <= 10:
         return {"x1": -1.0, "x2": 1.0, "y1": -1.0, "y2": 1.0}
     if function_case == 8:
         return {"x1": -4.0, "x2": 4.0, "y1": -3.0, "y2": 3.0}
@@ -141,6 +249,16 @@ def load_function_vectorized(x, y):
         tmp1 = -np.sin(e*k*0.5)*0.25*((ex*k + e*kx)**2 + (ey*k + e*ky)**2)
         tmp2 = np.cos(e*k*0.5)*0.5*( (exx*k + 2*ex*kx + e*kxx) + (eyy*k + 2*ey*ky + e*kyy) )
         return -(tmp1 + tmp2)
+    elif FUNCTION_CASE in (9, 10):
+        # Manufactured Poisson on polygon domains with homogeneous Dirichlet on w=0.
+        # We pick u_ex = w^2 so u_ex|_{\partial\Omega}=0 by construction.
+        # f = -Δu = -[2(|∇w|^2) + 2w(Δw)].
+        if ACTIVE_MODEL is None:
+            raise RuntimeError(
+                "ACTIVE_MODEL is not set. Call the FEM assembly routines with a model so GaussQuadrature can set ACTIVE_MODEL."
+            )
+        w, wx, wy, wxx, wyy = _eval_weight_and_hessian_diag_np(x, y, ACTIVE_MODEL, transform=mesh.TRANSFORM)
+        return -(2.0 * (wx ** 2 + wy ** 2) + 2.0 * w * (wxx + wyy))
     else:
         raise NotImplementedError
 
@@ -162,6 +280,8 @@ def dirichletBoundary_vectorized(x, y):
         return np.zeros_like(x)
     elif FUNCTION_CASE == 8:
         return np.zeros_like(x)
+    elif FUNCTION_CASE in (9, 10):
+        return np.zeros_like(x)
     else: 
         raise NotImplementedError
 
@@ -176,6 +296,8 @@ def dirichletBoundaryDerivativeX_vectorized(x, y):
     elif FUNCTION_CASE == 7:
         return np.zeros_like(x)
     elif FUNCTION_CASE ==8:
+        return np.zeros_like(x)
+    elif FUNCTION_CASE in (9, 10):
         return np.zeros_like(x)
     else: 
         raise NotImplementedError
@@ -192,9 +314,10 @@ def dirichletBoundaryDerivativeY_vectorized(x, y):
         return np.zeros_like(x)
     elif FUNCTION_CASE == 8:
         return np.zeros_like(x)
+    elif FUNCTION_CASE in (9, 10):
+        return np.zeros_like(x)
     else: 
         raise NotImplementedError
-
 
 def dirichletBoundaryDerivativeXX_vectorized(x, y):
         """Vectorized second derivative d²g/dx² of the prescribed Dirichlet data g(x,y).
@@ -208,7 +331,6 @@ def dirichletBoundaryDerivativeXX_vectorized(x, y):
         """
         # All currently supported Dirichlet boundary functions are at most linear.
         return np.zeros_like(x)
-
 
 def dirichletBoundaryDerivativeYY_vectorized(x, y):
         """Vectorized second derivative d²g/dy² of the prescribed Dirichlet data g(x,y).
@@ -226,7 +348,7 @@ def solution_function(x,y):
     if FUNCTION_CASE == 1:
         return x*(x**2 + y**2 -1)
     elif FUNCTION_CASE == 2:
-        return math.cos((x**2 + y**2)*math.pi/2)
+        return np.cos((x**2 + y**2)*np.pi/2)
     elif FUNCTION_CASE == 3:
         return x*(x**2 + y**2 -1) + 2
     elif FUNCTION_CASE == 4:
@@ -239,6 +361,11 @@ def solution_function(x,y):
         e = 1-(x**2)/16 -(y**2)/9
         k = x**2+1.5*x+y**2-y-3/16
         return np.sin(e*k*0.5)
+    elif FUNCTION_CASE in (9, 10):
+        if ACTIVE_MODEL is None:
+            raise RuntimeError("ACTIVE_MODEL is not set for FUNCTION_CASE 9/10.")
+        w, *_ = _eval_weight_and_hessian_diag_np(x, y, ACTIVE_MODEL, transform=mesh.TRANSFORM)
+        return w ** 2
     else: raise NotImplementedError
 def solution_function_derivative_x(x,y):
     if FUNCTION_CASE == 0:
@@ -248,9 +375,8 @@ def solution_function_derivative_x(x,y):
     if FUNCTION_CASE == 1:
         return 3*x**2 + y**2 -1
     elif FUNCTION_CASE == 2:
-        raise NotImplementedError
-        arg = (x**2 + y**2)*math.pi/2
-        return -math.pi*x*math.sin(arg)
+        arg = (x**2 + y**2)*np.pi/2
+        return -np.pi*x*np.sin(arg)
     elif FUNCTION_CASE == 3:
         return 3*x**2 + y**2 -1
     elif FUNCTION_CASE == 4:
@@ -267,6 +393,11 @@ def solution_function_derivative_x(x,y):
         k = x**2+1.5*x+y**2-y-3/16
         kx = 2*x +1.5
         return 0.5*np.cos(e*k*0.5)*(ex*k + e*kx)
+    elif FUNCTION_CASE in (9, 10):
+        if ACTIVE_MODEL is None:
+            raise RuntimeError("ACTIVE_MODEL is not set for FUNCTION_CASE 9/10.")
+        w, wx, *_ = _eval_weight_and_hessian_diag_np(x, y, ACTIVE_MODEL, transform=mesh.TRANSFORM)
+        return 2.0 * w * wx
     else: raise NotImplementedError
 def solution_function_derivative_y(x,y):
     if FUNCTION_CASE == 0:
@@ -295,6 +426,11 @@ def solution_function_derivative_y(x,y):
         k = x**2+1.5*x+y**2-y-3/16
         ky = 2*y -1
         return 0.5*np.cos(e*k*0.5)*(ey*k + e*ky)
+    elif FUNCTION_CASE in (9, 10):
+        if ACTIVE_MODEL is None:
+            raise RuntimeError("ACTIVE_MODEL is not set for FUNCTION_CASE 9/10.")
+        w, _, wy, *_ = _eval_weight_and_hessian_diag_np(x, y, ACTIVE_MODEL, transform=mesh.TRANSFORM)
+        return 2.0 * w * wy
     else: raise NotImplementedError
 
 def element(model,p,q,knotvector_x, knotvector_y,i,j,Bspxi,Bspeta):
@@ -367,6 +503,8 @@ def Subdivide(model,x1,x2,y1,y2,i,j,knotvector_x,knotvector_y,p,q,Bspxi,Bspeta,l
 
 def GaussQuadrature(model,x1,x2,y1,y2,i,j,p,q,knotvector_x,knotvector_y,Bspxi,Bspeta):
     """Fully vectorized Gauss quadrature - eliminates all Python loops over Gauss points"""
+    global ACTIVE_MODEL
+    ACTIVE_MODEL = model
     # Use cached Gauss points
     gaussP_x, gaussP_y, gauss_weights, num_gauss_points = _get_gauss_points(p)
     

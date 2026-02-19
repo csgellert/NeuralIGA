@@ -704,12 +704,15 @@ def collocation_2d(
     CD: Optional[Dict] = None,
     verbose: bool = True,
     domain: Optional[Dict[str, float]] = None,
+    solve_method: str = "auto",
+    dense_threshold: int = 2000,
     g: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
     gx: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
     gy: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
     gxx: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
     gyy: Optional[Callable[[np.ndarray, np.ndarray], np.ndarray]] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float, int, Dict]:
+    return_coefficients: bool = False,
+):
     """
     Solve -Δu = f on D: w(x,y) > 0, with u = 0 on ∂D.
     
@@ -735,6 +738,12 @@ def collocation_2d(
         If provided, the grid [0,1]^2 is mapped to this domain for f evaluation,
         and the Laplacian scaling is applied automatically.
         If None (default), f is evaluated directly on grid coordinates [0,1]^2.
+
+    solve_method : str
+        Linear solve strategy: 'auto', 'sparse', or 'dense'.
+        'auto' uses dense for small systems and sparse direct solve otherwise.
+    dense_threshold : int
+        If solve_method='auto', use dense solve when mi <= dense_threshold.
     
     Returns:
     --------
@@ -780,23 +789,35 @@ def collocation_2d(
                 "Either omit g to use FEM defaults, or provide all derivative callables."
             )
 
-    # Set up coordinate transformation and Laplacian scaling
+    # Set up coordinate transformation and Laplacian scaling.
+    #
+    # PDE is posed in physical coordinates (x_phys, y_phys):
+    #   - (∂²/∂x_phys² + ∂²/∂y_phys²) u = f_phys(x_phys, y_phys).
+    # With the affine mapping x_phys = x1 + scale_x * x_grid, the Laplacian becomes:
+    #   - (1/scale_x^2) ∂²/∂x_grid² u - (1/scale_y^2) ∂²/∂y_grid² u = f_phys(T(x_grid)).
+    #
+    # We implement this by:
+    #   - mapping all user functions (f, g, ...) to physical coords (no extra scaling),
+    #   - assembling the collocation operator with anisotropic factors ax=1/scale_x^2, ay=1/scale_y^2.
+    ax = 1.0
+    ay = 1.0
     if domain is not None:
         scale_x = domain['x2'] - domain['x1']
         scale_y = domain['y2'] - domain['y1']
-        laplacian_scale = scale_x * scale_y  # equals scale_x^2 for isotropic mappings
+        ax = 1.0 / (scale_x ** 2)
+        ay = 1.0 / (scale_y ** 2)
 
         def transform_to_physical(x, y):
             x_phys = domain['x1'] + np.asarray(x, dtype=NP_DTYPE) * scale_x
             y_phys = domain['y1'] + np.asarray(y, dtype=NP_DTYPE) * scale_y
             return x_phys, y_phys
 
-        # Wrap f to transform coordinates and scale the Laplacian (assumes isotropic intent)
+        # Wrap f to transform coordinates (PDE RHS is defined in physical coordinates).
         f_original = f
 
         def f_transformed(x, y):
             x_phys, y_phys = transform_to_physical(x, y)
-            return laplacian_scale * f_original(x_phys, y_phys)
+            return f_original(x_phys, y_phys)
 
         f = f_transformed
 
@@ -831,7 +852,7 @@ def collocation_2d(
 
         if verbose:
             print(f"Domain transform: [0,1]² → [{domain['x1']},{domain['x2']}]×[{domain['y1']},{domain['y2']}]" )
-            print(f"Laplacian scale factor: {laplacian_scale}")
+            print(f"Laplacian factors in grid coords: ax=1/scale_x^2={ax:.3e}, ay=1/scale_y^2={ay:.3e}")
     
     if n > 5:
         print("Error: degree n too large (max 5)")
@@ -1047,12 +1068,14 @@ def collocation_2d(
             b20 = CD['b20'][S1, S2]
             b02 = CD['b02'][S1, S2]
             
-            # -Δ(w*B) = -w*ΔB - 2*∇w·∇B - B*Δw
-            # MATLAB: -H*H*(b20+b02).*wB - b00.*(wxx+wyy) - 2*H*(b10.*wx + b01.*wy)
+            # Physical Laplacian under affine mapping:
+            #   -Δ_phys = -ax * ∂²_xgrid - ay * ∂²_ygrid,  ax=1/scale_x^2, ay=1/scale_y^2.
+            # Applied to (w*B) and expanded:
+            #   -Δ_phys(wB) = -ax*(w*B_xx + 2*w_x*B_x + B*w_xx) - ay*(w*B_yy + 2*w_y*B_y + B*w_yy)
             G[:, :, G_idx1, G_idx2] = (
-                -H * H * (b20 + b02) * wB_vals
-                - b00 * (wxxB + wyyB)
-                - 2 * H * (b10 * wxB + b01 * wyB)
+                -H * H * ((ax * b20) + (ay * b02)) * wB_vals
+                - b00 * ((ax * wxxB) + (ay * wyyB))
+                - 2 * H * ((ax * b10) * wxB + (ay * b01) * wyB)
             )
     
     # -------------------------------------------------------------------------
@@ -1066,11 +1089,12 @@ def collocation_2d(
     gxxB = gxx(xB, yB)
     gyyB = gyy(xB, yB)
 
-    # Δ((1-w)g) = -(wxx+wyy) g - 2(wx gx + wy gy) + (1-w)(gxx+gyy)
+    # Δ_phys((1-w)g) in grid derivatives:
+    #   ax * (-(wxx)g - 2 wx gx + (1-w) gxx) + ay * (-(wyy)g - 2 wy gy + (1-w) gyy)
     F_rhs = F_rhs + (
-        -(wxxB + wyyB) * gB
-        - 2.0 * (wxB * gxB + wyB * gyB)
-        + (1.0 - wB_vals) * (gxxB + gyyB)
+        -((ax * wxxB) + (ay * wyyB)) * gB
+        - 2.0 * ((ax * wxB * gxB) + (ay * wyB * gyB))
+        + (1.0 - wB_vals) * ((ax * gxxB) + (ay * gyyB))
     )
     
     # Convert G array to sparse matrix
@@ -1091,13 +1115,22 @@ def collocation_2d(
     t_start = time.time()
     
     F_inner = F_rhs.flat[IL]
-    
-    if sparse.issparse(SG_reduced):
-        SG_dense = SG_reduced.toarray()
+
+    dim_sys = mi
+    use_dense = (solve_method == "dense") or (solve_method == "auto" and dim_sys <= dense_threshold)
+    if use_dense:
+        if sparse.issparse(SG_reduced):
+            SG_dense = SG_reduced.toarray()
+        else:
+            SG_dense = np.asarray(SG_reduced)
+        SU = dense_solve(SG_dense, F_inner)
     else:
-        SG_dense = np.asarray(SG_reduced)
-    
-    SU = dense_solve(SG_dense, F_inner)
+        if not sparse.issparse(SG_reduced):
+            SG_reduced = sparse.csc_matrix(SG_reduced)
+        try:
+            SU = spsolve(SG_reduced.tocsc(), F_inner)
+        except Exception as exc:
+            raise RuntimeError(f"Sparse linear solve failed (mi={dim_sys}, method={solve_method}).") from exc
     
     # Extend coefficients to outer B-splines (MATLAB: U(JL)=T'*SU)
     U = np.zeros((dim_B, dim_B), dtype=NP_DTYPE)
@@ -1108,9 +1141,8 @@ def collocation_2d(
     rtimes['sol'] = time.time() - t_start
     rtimes['total'] = rtimes['sys'] + rtimes['ext'] + rtimes['sol']
     
-    # Condition number
-    dim_sys = mi
-    if dim_sys < 1000:
+    # Condition number (only feasible for small dense systems)
+    if dim_sys < 1000 and use_dense:
         if verbose:
             print("Estimating condition number...")
         try:
@@ -1161,7 +1193,198 @@ def collocation_2d(
     # Add the prescribed boundary extension part: (1-w)g
     Uxy_total = Uxy_result + (1.0 - wB_vals) * gB
     
+    if return_coefficients:
+        recon_info = {
+            'U': U.copy(),
+            'n': n,
+            'H': H,
+            'dim_B': dim_B,
+            'bw': bw,
+            'domain': domain,
+        }
+        return Uxy_total, xB, yB, con, dim_sys, rtimes, recon_info
+
     return Uxy_total, xB, yB, con, dim_sys, rtimes
+
+
+# =============================================================================
+# ARBITRARY-POINT B-SPLINE RECONSTRUCTION
+# =============================================================================
+
+def reconstruct_collocation_at_points(
+    pts_x: np.ndarray,
+    pts_y: np.ndarray,
+    recon_info: Dict,
+    wfct_phys: 'NeuralWeightFunction',
+) -> np.ndarray:
+    """Evaluate collocation solution at arbitrary physical-coordinate points.
+
+    Uses the B-spline basis expansion:
+        v(x_g, y_g) = sum_{j1,j2} U[j1,j2] * B_n(tau_x - j1) * B_n(tau_y - j2)
+        u = max(w, 0) * v
+
+    where tau_x = x_g * H + n, tau_y = y_g * H + n, and x_g is the grid
+    coordinate in [0, 1].
+
+    Parameters
+    ----------
+    pts_x, pts_y : array-like
+        Physical coordinates of evaluation points.
+    recon_info : dict
+        Reconstruction data returned by collocation_2d(return_coefficients=True).
+    wfct_phys : NeuralWeightFunction
+        Weight function that evaluates w in physical coordinates (domain=None).
+
+    Returns
+    -------
+    u_h : ndarray
+        Solution values at the given points.
+    """
+    pts_x = np.asarray(pts_x, dtype=NP_DTYPE).ravel()
+    pts_y = np.asarray(pts_y, dtype=NP_DTYPE).ravel()
+
+    U = recon_info['U']
+    n = recon_info['n']
+    H = recon_info['H']
+    dim_B = recon_info['dim_B']
+    domain = recon_info['domain']
+
+    # Map physical coords to grid coords [0,1]
+    if domain is not None:
+        x_g = (pts_x - domain['x1']) / (domain['x2'] - domain['x1'])
+        y_g = (pts_y - domain['y1']) / (domain['y2'] - domain['y1'])
+    else:
+        x_g = pts_x.copy()
+        y_g = pts_y.copy()
+
+    # B-spline parameter: tau = x_g * H + n
+    tau_x = x_g * H + n
+    tau_y = y_g * H + n
+
+    # Evaluate B_n(tau - j) for j = 0..dim_B-1
+    # Shape: (N_pts, dim_B)
+    j_vals = np.arange(dim_B, dtype=NP_DTYPE)
+    Bx = bspline_evaluate(tau_x[:, None] - j_vals[None, :], n)  # (N, dim_B)
+    By = bspline_evaluate(tau_y[:, None] - j_vals[None, :], n)  # (N, dim_B)
+
+    # v = sum_{j1,j2} U[j1,j2] * Bx[:,j1] * By[:,j2]
+    # Efficient: v = diag(Bx @ U @ By^T) = sum over j2 of (Bx @ U)[:,j2] * By[:,j2]
+    v = np.sum((Bx @ U) * By, axis=1)
+
+    # Weight in physical coords
+    w_vals, *_ = wfct_phys(pts_x, pts_y)
+    w_vals = np.asarray(w_vals, dtype=NP_DTYPE).ravel()
+
+    u_h = np.maximum(w_vals, 0.0) * v
+    return u_h
+
+
+def reconstruct_collocation_hessian_diag(
+    pts_x: np.ndarray,
+    pts_y: np.ndarray,
+    recon_info: Dict,
+    wfct_phys: 'NeuralWeightFunction',
+) -> tuple:
+    """Evaluate collocation solution value, gradient, and Hessian diagonal
+    at arbitrary physical-coordinate points.
+
+    The collocation solution is u = w * v (homogeneous Dirichlet), so:
+        u_x  = w_x * v + w * v_x
+        u_xx = w_xx * v + 2 * w_x * v_x + w * v_xx
+    (analogous for y).
+
+    Parameters
+    ----------
+    pts_x, pts_y : array-like
+        Physical coordinates of evaluation points.
+    recon_info : dict
+        Reconstruction data returned by collocation_2d(return_coefficients=True).
+    wfct_phys : NeuralWeightFunction
+        Weight function that evaluates (w, wx, wy, wxx, wyy) in physical coords.
+
+    Returns
+    -------
+    u, u_x, u_y, u_xx, u_yy : ndarray
+        Solution value, first and second partial derivatives.
+    """
+    pts_x = np.asarray(pts_x, dtype=NP_DTYPE).ravel()
+    pts_y = np.asarray(pts_y, dtype=NP_DTYPE).ravel()
+
+    U = recon_info['U']
+    n = recon_info['n']
+    H = recon_info['H']
+    dim_B = recon_info['dim_B']
+    domain = recon_info['domain']
+
+    # Map physical coords to grid coords [0,1]
+    if domain is not None:
+        scale_x = domain['x2'] - domain['x1']
+        scale_y = domain['y2'] - domain['y1']
+        x_g = (pts_x - domain['x1']) / scale_x
+        y_g = (pts_y - domain['y1']) / scale_y
+    else:
+        scale_x = 1.0
+        scale_y = 1.0
+        x_g = pts_x.copy()
+        y_g = pts_y.copy()
+
+    # B-spline parameters
+    tau_x = x_g * H + n
+    tau_y = y_g * H + n
+
+    j_vals = np.arange(dim_B, dtype=NP_DTYPE)
+    arg_x = tau_x[:, None] - j_vals[None, :]  # (N, dim_B)
+    arg_y = tau_y[:, None] - j_vals[None, :]  # (N, dim_B)
+
+    # B-spline values and derivatives w.r.t. tau
+    Bx = bspline_evaluate(arg_x, n)
+    By = bspline_evaluate(arg_y, n)
+    dBx = bspline_derivative(arg_x, n, order=1)
+    dBy = bspline_derivative(arg_y, n, order=1)
+    d2Bx = bspline_derivative(arg_x, n, order=2)
+    d2By = bspline_derivative(arg_y, n, order=2)
+
+    # Chain rule: d/dx_phys = (H / scale_x) * d/dtau
+    hsx = H / scale_x
+    hsy = H / scale_y
+
+    # Compute v and its physical-coordinate derivatives
+    BxU = Bx @ U   # (N, dim_B)
+    v = np.sum(BxU * By, axis=1)
+    v_x = hsx * np.sum((dBx @ U) * By, axis=1)
+    v_y = hsy * np.sum(BxU * dBy, axis=1)
+    v_xx = (hsx ** 2) * np.sum((d2Bx @ U) * By, axis=1)
+    v_yy = (hsy ** 2) * np.sum(BxU * d2By, axis=1)
+
+    # Weight function in physical coords
+    w_vals, wx, wy, wxx, wyy = wfct_phys(pts_x, pts_y)
+    w_vals = np.asarray(w_vals, dtype=NP_DTYPE).ravel()
+    wx = np.asarray(wx, dtype=NP_DTYPE).ravel()
+    wy = np.asarray(wy, dtype=NP_DTYPE).ravel()
+    wxx = np.asarray(wxx, dtype=NP_DTYPE).ravel()
+    wyy = np.asarray(wyy, dtype=NP_DTYPE).ravel()
+
+    # Clip w for outside points
+    w_pos = np.maximum(w_vals, 0.0)
+
+    # u = w * v  (using max(w,0) to enforce 0 outside)
+    u = w_pos * v
+
+    # Derivatives (product rule, only meaningful where w > 0)
+    u_x = wx * v + w_vals * v_x
+    u_y = wy * v + w_vals * v_y
+    u_xx = wxx * v + 2.0 * wx * v_x + w_vals * v_xx
+    u_yy = wyy * v + 2.0 * wy * v_y + w_vals * v_yy
+
+    # Zero out outside domain
+    outside = w_vals <= 0
+    u[outside] = 0.0
+    u_x[outside] = 0.0
+    u_y[outside] = 0.0
+    u_xx[outside] = 0.0
+    u_yy[outside] = 0.0
+
+    return u, u_x, u_y, u_xx, u_yy
 
 
 # =============================================================================
@@ -1238,6 +1461,9 @@ def run_example(
     verbose: bool = True,
     show_plot: bool = True,
     CD: Optional[Dict] = None,
+    solve_method: str = "auto",
+    dense_threshold: int = 2000,
+    plot_mode: str = "3d",
 ):
     """
     Run the collocation example.
@@ -1290,6 +1516,8 @@ def run_example(
             CD=CD,
             verbose=verbose,
             domain=DOMAIN,
+            solve_method=solve_method,
+            dense_threshold=dense_threshold,
         )
 
         if Uxy is None:
@@ -1374,7 +1602,7 @@ def run_example(
         }
 
         if show_plot:
-            visualize_solution(result)
+            visualize_solution(result, plot_mode=plot_mode)
 
         return result
     finally:
@@ -1383,7 +1611,7 @@ def run_example(
         DOMAIN = old_domain_local
 
 
-def visualize_solution(results: Dict, show_error: bool = True):
+def visualize_solution(results: Dict, show_error: bool = True, plot_mode: str = "3d"):
     """
     Visualize the solution and error.
     
@@ -1393,9 +1621,18 @@ def visualize_solution(results: Dict, show_error: bool = True):
         Output from run_example()
     show_error : bool
         Also plot the error distribution
+    plot_mode : str
+        Plotting style: '3d' (surface) or 'heatmap' (2d).
     """
     import matplotlib.pyplot as plt
-    from mpl_toolkits.mplot3d import Axes3D
+
+    plot_mode_norm = (plot_mode or "3d").strip().lower()
+    if plot_mode_norm in {"2d", "heatmap", "hm"}:
+        plot_mode_norm = "heatmap"
+    elif plot_mode_norm in {"3d", "surface", "surf"}:
+        plot_mode_norm = "3d"
+    else:
+        raise ValueError(f"Unknown plot_mode='{plot_mode}'. Use '3d' or 'heatmap'.")
     
     Uxy = results['Uxy']
     xB = results['xB']
@@ -1411,45 +1648,65 @@ def visualize_solution(results: Dict, show_error: bool = True):
     uxy_exact_plot = np.array(uxy_exact, copy=True)
     Uxy_plot[~mask] = np.nan
     uxy_exact_plot[~mask] = np.nan
-    
-    if show_error:
-        fig = plt.figure(figsize=(14, 5))
-        
-        # Numerical solution
-        ax1 = fig.add_subplot(131, projection='3d')
-        ax1.plot_surface(xB, yB, Uxy_plot, cmap='viridis', alpha=0.8)
-        ax1.set_xlabel('x')
-        ax1.set_ylabel('y')
-        ax1.set_zlabel('u')
-        ax1.set_title('Numerical Solution')
-        
-        # Exact solution
-        ax2 = fig.add_subplot(132, projection='3d')
-        ax2.plot_surface(xB, yB, uxy_exact_plot, cmap='viridis', alpha=0.8)
-        ax2.set_xlabel('x')
-        ax2.set_ylabel('y')
-        ax2.set_zlabel('u')
-        ax2.set_title('Exact Solution')
-        
-        # Error
-        ax3 = fig.add_subplot(133, projection='3d')
-        error = np.abs(Uxy - uxy_exact)
-        error[~mask] = np.nan
-        ax3.plot_surface(xB, yB, error, cmap='hot', alpha=0.8)
-        ax3.set_xlabel('x')
-        ax3.set_ylabel('y')
-        ax3.set_zlabel('|error|')
-        ax3.set_title(f'Absolute Error (max={results["ErrMax"]:.2e})')
-    else:
-        fig = plt.figure(figsize=(8, 6))
-        ax = fig.add_subplot(111, projection='3d')
-        ax.plot_surface(xB, yB, Uxy_plot, cmap='viridis', alpha=0.8)
+
+    def _plot_heatmap(ax, Z, title: str, cmap: str):
+        # pcolormesh works for general (xB,yB) grids.
+        mappable = ax.pcolormesh(xB, yB, Z, shading='auto', cmap=cmap)
+        ax.set_aspect('equal', adjustable='box')
         ax.set_xlabel('x')
         ax.set_ylabel('y')
-        ax.set_zlabel('u')
-        ax.set_title('WEB-Spline Collocation Solution')
+        ax.set_title(title)
+        plt.colorbar(mappable, ax=ax, fraction=0.046, pad=0.04)
     
-    plt.tight_layout()
+    error = np.abs(Uxy - uxy_exact)
+    error[~mask] = np.nan
+
+    if plot_mode_norm == "heatmap":
+        if show_error:
+            fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 4.8), constrained_layout=True)
+            _plot_heatmap(ax1, Uxy_plot, 'Numerical Solution', cmap='viridis')
+            _plot_heatmap(ax2, uxy_exact_plot, 'Exact Solution', cmap='viridis')
+            _plot_heatmap(ax3, error, f'Absolute Error (max={results["ErrMax"]:.2e})', cmap='hot')
+        else:
+            fig, ax = plt.subplots(1, 1, figsize=(6.8, 5.6), constrained_layout=True)
+            _plot_heatmap(ax, Uxy_plot, 'WEB-Spline Collocation Solution', cmap='viridis')
+    else:
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+        if show_error:
+            fig = plt.figure(figsize=(14, 5))
+
+            # Numerical solution
+            ax1 = fig.add_subplot(131, projection='3d')
+            ax1.plot_surface(xB, yB, Uxy_plot, cmap='viridis', alpha=0.8)
+            ax1.set_xlabel('x')
+            ax1.set_ylabel('y')
+            ax1.set_zlabel('u')
+            ax1.set_title('Numerical Solution')
+
+            # Exact solution
+            ax2 = fig.add_subplot(132, projection='3d')
+            ax2.plot_surface(xB, yB, uxy_exact_plot, cmap='viridis', alpha=0.8)
+            ax2.set_xlabel('x')
+            ax2.set_ylabel('y')
+            ax2.set_zlabel('u')
+            ax2.set_title('Exact Solution')
+
+            # Error
+            ax3 = fig.add_subplot(133, projection='3d')
+            ax3.plot_surface(xB, yB, error, cmap='hot', alpha=0.8)
+            ax3.set_xlabel('x')
+            ax3.set_ylabel('y')
+            ax3.set_zlabel('|error|')
+            ax3.set_title(f'Absolute Error (max={results["ErrMax"]:.2e})')
+        else:
+            fig = plt.figure(figsize=(8, 6))
+            ax = fig.add_subplot(111, projection='3d')
+            ax.plot_surface(xB, yB, Uxy_plot, cmap='viridis', alpha=0.8)
+            ax.set_xlabel('x')
+            ax.set_ylabel('y')
+            ax.set_zlabel('u')
+            ax.set_title('WEB-Spline Collocation Solution')
+    
     plt.show()
 
 

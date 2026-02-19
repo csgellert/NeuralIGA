@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import math
+from typing import Optional
 from bspline import Bspline
 from torch import nn
 import torch
@@ -105,6 +106,196 @@ def torch_distance_point_to_line(px, py, x1, y1, x2, y2):
    proj_x = x1 + t * (x2 - x1)
    proj_y = y1 + t * (y2 - y1)
    return torch.sqrt((px - proj_x) ** 2 + (py - proj_y) ** 2 + eps)
+
+
+def _point_in_convex_polygon_ccw(crd: torch.Tensor, vertices_ccw: torch.Tensor) -> torch.Tensor:
+   """Return boolean mask whether points are inside a CCW convex polygon.
+
+   Args:
+      crd: tensor of shape (..., 2)
+      vertices_ccw: tensor of shape (m, 2) ordered counter-clockwise
+
+   Returns:
+      inside: boolean tensor of shape (...,)
+   """
+   v0 = vertices_ccw
+   v1 = torch.roll(vertices_ccw, shifts=-1, dims=0)
+   edge = v1 - v0  # (m,2)
+   rel = crd[..., None, :] - v0  # (...,m,2)
+   cross = edge[:, 0] * rel[..., :, 1] - edge[:, 1] * rel[..., :, 0]  # (...,m)
+   return torch.all(cross >= 0, dim=-1)
+
+
+def _halfplane_distances(
+   crd: torch.Tensor,
+   vertices_ccw: torch.Tensor,
+) -> list:
+   """Signed perpendicular distances to each edge *line* of a convex polygon.
+
+   For CCW-ordered vertices the inward normal of edge (v_i -> v_{i+1}) is
+   obtained by rotating the edge direction 90° counter-clockwise: (-e_y, e_x).
+   The signed distance h_i = n_i · (p - v_i) is positive inside the half-plane,
+   negative outside, and exactly zero on the edge line.
+
+   Because each h_i is a *linear* function of (x, y) it is infinitely
+   differentiable everywhere — no sqrt, no eps stabiliser needed.
+   """
+   v0 = vertices_ccw
+   v1 = torch.roll(vertices_ccw, shifts=-1, dims=0)
+
+   dists = []
+   for i in range(vertices_ccw.shape[0]):
+      ex = v1[i, 0] - v0[i, 0]
+      ey = v1[i, 1] - v0[i, 1]
+      length = torch.sqrt(ex * ex + ey * ey)
+      # Inward normal for CCW polygon: (-ey, ex) / |e|
+      nx = -ey / length
+      ny = ex / length
+      h = nx * (crd[..., 0] - v0[i, 0]) + ny * (crd[..., 1] - v0[i, 1])
+      dists.append(h)
+
+   return dists
+
+
+def convex_polygon_distance_smooth(
+   crd: torch.Tensor,
+   vertices_ccw: torch.Tensor,
+   preserve_zero_line: bool = True,
+   k: float = 0.1,
+   eps: float = 1e-12,
+) -> torch.Tensor:
+   """Smooth signed distance-like function to a convex polygon boundary.
+
+   The result is *distance-like* (0 on boundary, >0 inside, <0 outside) and is
+   continuously differentiable for smooth-min variants.
+
+   Notes:
+   - True signed distance is not smooth at vertices; this is an approximation
+     intended as a WEB/collocation weight w with usable derivatives.
+   - ``preserve_zero_line=True`` uses signed half-plane distances (linear
+     functions, exactly 0 on each edge line) combined with the R0 R-function
+     (eps=0). This preserves the w=0 contour analytically. The only point
+     where the gradient is singular is at polygon vertices (two half-planes
+     simultaneously zero) — a measure-zero set that collocation grids do
+     not hit in practice.
+   """
+   if preserve_zero_line:
+      # Half-plane distances: linear → infinitely differentiable, exactly 0
+      # on the edge lines.  R0 with eps=0 preserves zeros analytically.
+      # The sign (positive inside, negative outside) is built into the
+      # half-plane distances, so no separate inside/sign logic is needed.
+      hp = _halfplane_distances(crd, vertices_ccw)
+      dist = hp[0]
+      for h in hp[1:]:
+         dist = smooth_min_preserve_zero(dist, h, eps=0.0)
+      return dist
+   else:
+      x = crd[..., 0]
+      y = crd[..., 1]
+
+      v0 = vertices_ccw
+      v1 = torch.roll(vertices_ccw, shifts=-1, dims=0)
+
+      dists = [
+         torch_distance_point_to_line(
+            x,
+            y,
+            v0[i, 0],
+            v0[i, 1],
+            v1[i, 0],
+            v1[i, 1],
+         )
+         for i in range(vertices_ccw.shape[0])
+      ]
+
+      dist = dists[0]
+      for d in dists[1:]:
+         dist = smooth_min(dist, d, k=k)
+
+      inside = _point_in_convex_polygon_ccw(crd, vertices_ccw)
+      sign = torch.where(inside, torch.tensor(1.0, dtype=dist.dtype, device=dist.device), torch.tensor(-1.0, dtype=dist.dtype, device=dist.device))
+      return dist * sign
+
+
+def convex_polygon_sdf(
+   crd: torch.Tensor,
+   vertices_ccw: torch.Tensor,
+   eps: float = 1e-12,
+) -> torch.Tensor:
+   """True signed distance function for a convex polygon.
+
+   Computes exact Euclidean distance to the nearest edge using hard min.
+   Positive inside, negative outside, zero on boundary.
+
+   Unlike convex_polygon_distance_smooth, this uses torch.min (not R-functions),
+   giving the true SDF. Non-smooth at interior ridges equidistant from two edges.
+   """
+   x = crd[..., 0]
+   y = crd[..., 1]
+
+   v0 = vertices_ccw
+   v1 = torch.roll(vertices_ccw, shifts=-1, dims=0)
+
+   dists = torch.stack([
+      torch_distance_point_to_line(
+         x, y, v0[i, 0], v0[i, 1], v1[i, 0], v1[i, 1],
+      )
+      for i in range(vertices_ccw.shape[0])
+   ], dim=-1)
+
+   dist = torch.min(dists, dim=-1).values
+
+   inside = _point_in_convex_polygon_ccw(crd, vertices_ccw)
+   sign = torch.where(inside,
+                      torch.tensor(1.0, dtype=dist.dtype, device=dist.device),
+                      torch.tensor(-1.0, dtype=dist.dtype, device=dist.device))
+   return dist * sign
+
+
+def hollig_transform(d: torch.Tensor, delta: float = 0.1, gamma: float = 3.0) -> torch.Tensor:
+   """Höllig weight function applied to a signed distance field.
+
+   w(d) = 1 - clamp(1 - d/delta, min=0)^gamma
+
+   Maps: d=0 -> w=0 (boundary), d>=delta -> w=1 (deep inside).
+   For d<0 (outside), w<0. Smoothness class C^{gamma-1}.
+   Same formula as mesh.hollig_weight.
+   """
+   term = 1.0 - d / delta
+   term = torch.clamp(term, min=0.0)
+   return 1.0 - torch.pow(term, gamma)
+
+
+def regular_polygon_vertices_np(
+   n_sides: int,
+   radius: float = 0.9,
+   center: tuple = (0.0, 0.0),
+   rotation: float = 0.0,
+) -> np.ndarray:
+   """Create CCW vertices for a regular polygon (NumPy)."""
+   cx, cy = float(center[0]), float(center[1])
+   angles = rotation + np.linspace(0.0, 2.0 * np.pi, n_sides, endpoint=False)
+   x = cx + radius * np.cos(angles)
+   y = cy + radius * np.sin(angles)
+   return np.stack([x, y], axis=1)
+
+
+def ensure_vertices_ccw_np(vertices: np.ndarray) -> np.ndarray:
+   """Return vertices ordered CCW (NumPy).
+
+   Uses the signed polygon area: positive => CCW.
+   """
+   v = np.asarray(vertices, dtype=np.float64)
+   if v.ndim != 2 or v.shape[1] != 2 or v.shape[0] < 3:
+      raise ValueError("vertices must have shape (m,2) with m>=3")
+   x = v[:, 0]
+   y = v[:, 1]
+   x1 = np.roll(x, -1)
+   y1 = np.roll(y, -1)
+   area2 = np.sum(x * y1 - y * x1)
+   if area2 < 0:
+      return v[::-1].copy()
+   return v
 
 
 def l_shape_distance(crd):
@@ -343,6 +534,191 @@ class AnaliticalDistanceLshape_RFunction(nn.Module):
       else:
          title += f' (k={self.smoothness})'
       plt.title(title)
+      plt.show()
+
+
+class AnaliticalDistanceTriangle_RFunction(nn.Module):
+   """Smooth triangle weight function (convex polygon) on [-1,1]^2."""
+
+   def __init__(
+      self,
+      smoothness: float = 0.1,
+      preserve_zero_line: bool = True,
+      vertices: Optional[np.ndarray] = None,
+   ):
+      super().__init__()
+      self.smoothness = float(smoothness)
+      self.preserve_zero_line = bool(preserve_zero_line)
+
+      # Default: a reasonably sized CCW triangle inside [-1,1]^2.
+      if vertices is None:
+         vertices = np.array(
+            [
+               [-0.85, -0.60],
+               [0.90, -0.55],
+               [0.05, 0.92],
+            ],
+            dtype=np.float64,
+         )
+      self._vertices_np = ensure_vertices_ccw_np(np.asarray(vertices, dtype=np.float64))
+
+   def forward(self, crd: torch.Tensor) -> torch.Tensor:
+      verts = crd.new_tensor(self._vertices_np)
+      return convex_polygon_distance_smooth(
+         crd,
+         verts,
+         preserve_zero_line=self.preserve_zero_line,
+         k=self.smoothness,
+      )
+
+   def create_contour_plot(self, resolution=200):
+      x = np.linspace(-1.01, 1.01, resolution)
+      y = np.linspace(-1.01, 1.01, resolution)
+      X, Y = np.meshgrid(x, y)
+      crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+      with torch.no_grad():
+         Z = self.forward(crd).cpu().numpy()
+      plt.contourf(X, Y, Z, levels=50, cmap='viridis')
+      plt.colorbar(label='w')
+      plt.contour(X, Y, Z, levels=[0], colors='k', linewidths=1)
+      plt.xlabel('x')
+      plt.ylabel('y')
+      title = 'Triangle weight function'
+      title += ' (zero-preserving)' if self.preserve_zero_line else f' (k={self.smoothness})'
+      plt.title(title)
+      plt.show()
+
+
+class AnaliticalDistancePentagon_RFunction(nn.Module):
+   """Smooth regular pentagon weight function (convex polygon) on [-1,1]^2."""
+
+   def __init__(
+      self,
+      smoothness: float = 0.1,
+      preserve_zero_line: bool = True,
+      radius: float = 0.9,
+      rotation: float = np.pi / 2,
+      center: tuple = (0.0, 0.0),
+   ):
+      super().__init__()
+      self.smoothness = float(smoothness)
+      self.preserve_zero_line = bool(preserve_zero_line)
+      self._vertices_np = ensure_vertices_ccw_np(regular_polygon_vertices_np(
+         5,
+         radius=float(radius),
+         center=center,
+         rotation=float(rotation),
+      ).astype(np.float64))
+
+   def forward(self, crd: torch.Tensor) -> torch.Tensor:
+      verts = crd.new_tensor(self._vertices_np)
+      return convex_polygon_distance_smooth(
+         crd,
+         verts,
+         preserve_zero_line=self.preserve_zero_line,
+         k=self.smoothness,
+      )
+
+   def create_contour_plot(self, resolution=200):
+      x = np.linspace(-1.01, 1.01, resolution)
+      y = np.linspace(-1.01, 1.01, resolution)
+      X, Y = np.meshgrid(x, y)
+      crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+      with torch.no_grad():
+         Z = self.forward(crd).cpu().numpy()
+      plt.contourf(X, Y, Z, levels=50, cmap='viridis')
+      plt.colorbar(label='w')
+      plt.contour(X, Y, Z, levels=[0], colors='k', linewidths=1)
+      plt.xlabel('x')
+      plt.ylabel('y')
+      title = 'Pentagon weight function'
+      title += ' (zero-preserving)' if self.preserve_zero_line else f' (k={self.smoothness})'
+      plt.title(title)
+      plt.show()
+
+
+class AnaliticalDistanceTriangle_SDF_Hollig(nn.Module):
+   """True SDF for a triangle, post-processed with Höllig weight function.
+
+   Computes exact signed distance to the triangle boundary (hard min of
+   per-edge distances), then applies the Höllig transformation
+   w(d) = 1 - max(0, 1 - d/delta)^gamma.
+   The resulting weight is C^{gamma-1} smooth near the boundary and
+   equals 1 deep inside the domain.
+   """
+
+   def __init__(
+      self,
+      vertices: Optional[np.ndarray] = None,
+      delta: float = 0.1,
+      gamma: float = 3.0,
+   ):
+      super().__init__()
+      self.delta = float(delta)
+      self.gamma = float(gamma)
+      if vertices is None:
+         vertices = np.array(
+            [[-0.85, -0.60], [0.90, -0.55], [0.05, 0.92]], dtype=np.float64,
+         )
+      self._vertices_np = ensure_vertices_ccw_np(np.asarray(vertices, dtype=np.float64))
+
+   def forward(self, crd: torch.Tensor) -> torch.Tensor:
+      verts = crd.new_tensor(self._vertices_np)
+      sdf = convex_polygon_sdf(crd, verts)
+      return hollig_transform(sdf, delta=self.delta, gamma=self.gamma)
+
+   def create_contour_plot(self, resolution=200):
+      x = np.linspace(-1.01, 1.01, resolution)
+      y = np.linspace(-1.01, 1.01, resolution)
+      X, Y = np.meshgrid(x, y)
+      crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+      with torch.no_grad():
+         Z = self.forward(crd).cpu().numpy()
+      plt.contourf(X, Y, Z, levels=50, cmap='viridis')
+      plt.colorbar(label='w (Höllig)')
+      plt.contour(X, Y, Z, levels=[0], colors='k', linewidths=1)
+      plt.xlabel('x')
+      plt.ylabel('y')
+      plt.title(f'Triangle SDF + Höllig (δ={self.delta}, γ={self.gamma})')
+      plt.show()
+
+
+class AnaliticalDistancePentagon_SDF_Hollig(nn.Module):
+   """True SDF for a regular pentagon, post-processed with Höllig weight function."""
+
+   def __init__(
+      self,
+      delta: float = 0.1,
+      gamma: float = 3.0,
+      radius: float = 0.9,
+      rotation: float = np.pi / 2,
+      center: tuple = (0.0, 0.0),
+   ):
+      super().__init__()
+      self.delta = float(delta)
+      self.gamma = float(gamma)
+      self._vertices_np = ensure_vertices_ccw_np(regular_polygon_vertices_np(
+         5, radius=float(radius), center=center, rotation=float(rotation),
+      ).astype(np.float64))
+
+   def forward(self, crd: torch.Tensor) -> torch.Tensor:
+      verts = crd.new_tensor(self._vertices_np)
+      sdf = convex_polygon_sdf(crd, verts)
+      return hollig_transform(sdf, delta=self.delta, gamma=self.gamma)
+
+   def create_contour_plot(self, resolution=200):
+      x = np.linspace(-1.01, 1.01, resolution)
+      y = np.linspace(-1.01, 1.01, resolution)
+      X, Y = np.meshgrid(x, y)
+      crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+      with torch.no_grad():
+         Z = self.forward(crd).cpu().numpy()
+      plt.contourf(X, Y, Z, levels=50, cmap='viridis')
+      plt.colorbar(label='w (Höllig)')
+      plt.contour(X, Y, Z, levels=[0], colors='k', linewidths=1)
+      plt.xlabel('x')
+      plt.ylabel('y')
+      plt.title(f'Pentagon SDF + Höllig (δ={self.delta}, γ={self.gamma})')
       plt.show()
 
 

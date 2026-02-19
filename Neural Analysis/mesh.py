@@ -9,11 +9,11 @@ NP_DTYPE = np.float64
 
 
 USE_SIGMOID_FOR_DISTANCE = False
-TRANSFORM = None  # Options: "sigmoid", "tanh", "hollig", None
+TRANSFORM =  None  # Options: "sigmoid", "tanh", "hollig", None
 #if TRANSFORM == "trapezoid": raise NameError("Trapezoid transform is not recommended, use sigmoid or tanh instead")
 TANG = 1  # Used for trapezoid transform, adjust as needed
-DELTA_HOLLIG = 1  # Controls the width of the strip for Höllig weight function
-GAMMA_HOLLIG = 5  # Controls the smoothness for Höllig weight function
+DELTA_HOLLIG = 0.02  # Controls the width of the strip for Höllig weight function
+GAMMA_HOLLIG = 3  # Controls the smoothness for Höllig weight function
 def generateRectangularMesh(x0, y0, x1, y1, xDivision,yDivision,p=1,q=1):
     assert x0 < x1 and y0 < y1
     knotvector_u = np.linspace(x0,x1,xDivision+2)
@@ -45,7 +45,9 @@ def getDefaultValues(div=2,order=1,delta = 0):
     xDivision = div
     yDivision = div
     return x0, y0,x1,y1,xDivision,yDivision,p,q
-def distanceFromContur(x,y,model,transform=TRANSFORM):
+def distanceFromContur(x,y,model,transform=None):
+    if transform is None:
+        transform = TRANSFORM
     crd = torch.tensor([x,y],requires_grad=False,dtype=TORCH_DTYPE)
     d = model(crd)
     if transform == "sigmoid":
@@ -61,7 +63,9 @@ def distanceFromContur(x,y,model,transform=TRANSFORM):
     elif transform == "hollig":
         d = hollig_weight(d).item()
     return d
-def distance_with_derivative(x,y,model,transform=TRANSFORM):
+def distance_with_derivative(x,y,model,transform=None):
+    if transform is None:
+        transform = TRANSFORM
     crd = torch.tensor([x,y],requires_grad=True,dtype=TORCH_DTYPE)
     d = model(crd)
     d.backward()
@@ -87,7 +91,9 @@ def distance_with_derivative(x,y,model,transform=TRANSFORM):
         dy = dw_dd * dy
         d = hollig_weight(d).item()
     return d,dx,dy
-def distance_with_derivative_vect_trasformed(x,y,model,transform=TRANSFORM):
+def distance_with_derivative_vect_trasformed(x,y,model,transform=None):
+    if transform is None:
+        transform = TRANSFORM
     crd = torch.tensor(np.array([x,y]),dtype=TORCH_DTYPE).T
     crd.requires_grad = True
     d = model(crd)
@@ -136,13 +142,21 @@ def logarithmic(x):
     return torch.log(x + 1)
 def exponential(x):
     return torch.exp(x) - 1
-def hollig_weight(d, delta=DELTA_HOLLIG, gamma=GAMMA_HOLLIG):
+def hollig_weight(d, delta=None, gamma=None):
     """Höllig weight function: w(x) = 1 - max(0, 1 - dist/delta)^gamma"""
+    if delta is None:
+        delta = DELTA_HOLLIG
+    if gamma is None:
+        gamma = GAMMA_HOLLIG
     term = 1.0 - d / delta
     term = torch.clamp(term, min=0.0)  # max(0, 1 - d/delta)
     return 1.0 - torch.pow(term, gamma)
-def hollig_weight_derivative(d, delta=DELTA_HOLLIG, gamma=GAMMA_HOLLIG):
+def hollig_weight_derivative(d, delta=None, gamma=None):
     """Derivative of Höllig weight function with respect to distance d"""
+    if delta is None:
+        delta = DELTA_HOLLIG
+    if gamma is None:
+        gamma = GAMMA_HOLLIG
     term = 1.0 - d / delta
     mask = term > 0  # Only non-zero derivative where term > 0
     derivative = torch.zeros_like(d)

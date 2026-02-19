@@ -111,7 +111,7 @@ elif USE_WEB_TRANSFORM:
     print("Len u:", len(result))
     evaluation_WEB.printL2andH1Errors(metrics)
     evaluation_WEB.plotSolutionHeatmapWEB(model,result,knotvector_u,knotvector_w,p,q,bspline_classification=bsp_class,extended_basis=ext_basis,N=100)
-    evaluation_WEB.plotErrorHeatmapWEB(model,result,knotvector_u,knotvector_w,p,q,bspline_classification=bsp_class,extended_basis=ext_basis)
+    #evaluation_WEB.plotErrorHeatmapWEB(model,result,knotvector_u,knotvector_w,p,q,bspline_classification=bsp_class,extended_basis=ext_basis)
 else:
     print("Solving using standard method")
     result = FEM.solveWeak(K,F)

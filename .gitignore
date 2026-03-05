@@ -4,6 +4,10 @@
 *.pth
 #generated_picures
 *.png
+#LLM stuff
+tmpclaude*
+NUL
+_*
 #profiling staff
 profiling_stats*
 *.prof_stats

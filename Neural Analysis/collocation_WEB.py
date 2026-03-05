@@ -759,6 +759,11 @@ def collocation_2d(
         Computing times for different stages
     """
     rtimes = {'sys': np.nan, 'ext': np.nan, 'sol': np.nan, 'total': np.nan}
+
+    def _early_return(Uxy, xB, yB, con, dim_sys):
+        if return_coefficients:
+            return Uxy, xB, yB, con, dim_sys, rtimes, None
+        return Uxy, xB, yB, con, dim_sys, rtimes
     
     # ---------------------------------------------------------------------
     # Optional non-homogeneous Dirichlet handling via blended ansatz:
@@ -856,7 +861,7 @@ def collocation_2d(
     
     if n > 5:
         print("Error: degree n too large (max 5)")
-        return None, None, None, np.nan, np.nan, rtimes
+        return _early_return(None, None, None, np.nan, np.nan)
     
     # Load or compute collocation data
     if CD is None:
@@ -907,7 +912,7 @@ def collocation_2d(
     
     if mi == 0:
         print("Error: No inner B-splines found. Grid may be too coarse.")
-        return None, None, None, np.nan, 0, rtimes
+        return _early_return(None, None, None, np.nan, 0)
     
     # Create index mapping: Bindex[k1, k2] = reduced index for inner B-spline (k1, k2)
     # MATLAB: Bindex(IL)=1:mi (1-based), we use 0-based
@@ -925,7 +930,7 @@ def collocation_2d(
     
     if not np.any(eI):
         print("Error: Grid width 1/H too large - no fully inner element arrays")
-        return None, None, None, np.nan, 0, rtimes
+        return _early_return(None, None, None, np.nan, 0)
     
     # Centers of inner element arrays
     # MATLAB: (1/2:H)/H gives centers at 0.5/H, 1.5/H, ..., (H-0.5)/H

@@ -774,6 +774,189 @@ class AnaliticalDistanceDisc_WEB(nn.Module):
       plt.ylabel('y')
       plt.title('WEB disc weight function w (zero contour shown)')
       plt.show()
+class AnaliticalDistanceEllipsePentagon_RFunction(nn.Module):
+   """Five-sided domain bounded by ellipse arcs, using algebraic distance.
+
+   Each "side" is defined by an ellipse. The domain is the intersection
+   of the interiors of all five ellipses. The weight function uses the
+   algebraic distance (implicit function value) for each ellipse, combined
+   via the R0 R-function (smooth_min_preserve_zero).
+
+   Algebraic distance for ellipse k:
+      F_k(x,y) = 1 - [(delta . t_k)^2 / a_k^2 + (delta . r_k)^2 / b_k^2]
+
+   where delta = (x - cx_k, y - cy_k), t_k is the tangential direction,
+   r_k is the radial direction, a_k is the tangential semi-axis, and
+   b_k is the radial semi-axis.
+
+   Parameters
+   ----------
+   n_sides : int
+       Number of sides (default 5).
+   center_distance : float
+       Distance from origin to each ellipse center.
+   semi_axis_tangential : float or array-like
+       Semi-axis along the tangential direction (parallel to side).
+   semi_axis_radial : float or array-like
+       Semi-axis along the radial direction (perpendicular to side).
+   rotation_offset : float
+       Rotation of the entire shape (radians). Default pi/2 (first
+       center at top).
+   preserve_zero_line : bool
+       Whether to use the zero-preserving R-function combination.
+   eps : float
+       Smoothing parameter for the R-function.
+   """
+
+   def __init__(
+      self,
+      n_sides: int = 5,
+      center_distance: float = 1.5,
+      semi_axis_tangential: float = 1.2,
+      semi_axis_radial: float = 0.85,
+      rotation_offset: float = np.pi / 2,
+      preserve_zero_line: bool = True,
+      eps: float = 1e-6,
+   ):
+      super().__init__()
+      self.n_sides = n_sides
+      self.preserve_zero_line = bool(preserve_zero_line)
+      self.eps = float(eps)
+
+      angles = rotation_offset + 2 * np.pi * np.arange(n_sides) / n_sides
+
+      if np.isscalar(semi_axis_tangential):
+         semi_axis_tangential = np.full(n_sides, float(semi_axis_tangential))
+      if np.isscalar(semi_axis_radial):
+         semi_axis_radial = np.full(n_sides, float(semi_axis_radial))
+
+      self._centers_np = np.stack([
+         center_distance * np.cos(angles),
+         center_distance * np.sin(angles),
+      ], axis=-1).astype(np.float64)  # (n_sides, 2)
+
+      self._angles_np = np.asarray(angles, dtype=np.float64)
+      self._semi_a_np = np.asarray(semi_axis_tangential, dtype=np.float64)
+      self._semi_b_np = np.asarray(semi_axis_radial, dtype=np.float64)
+
+      # Pre-compute boundary path for visualization
+      self._boundary_pts = self._compute_boundary_path(500)
+
+   def _compute_boundary_path(self, n_pts: int = 500) -> np.ndarray:
+      """Sample the boundary (w approx 0) via polar bisection."""
+      theta = np.linspace(0, 2 * np.pi, n_pts, endpoint=False)
+      r_boundary = np.zeros(n_pts)
+      for i in range(n_pts):
+         cos_th = np.cos(theta[i])
+         sin_th = np.sin(theta[i])
+         r_lo, r_hi = 0.0, 3.0
+         for _ in range(60):
+            r_mid = 0.5 * (r_lo + r_hi)
+            x, y = r_mid * cos_th, r_mid * sin_th
+            min_F = self._min_algebraic_distance_scalar(x, y)
+            if min_F > 0:
+               r_lo = r_mid
+            else:
+               r_hi = r_mid
+         r_boundary[i] = 0.5 * (r_lo + r_hi)
+      pts = np.stack([r_boundary * np.cos(theta),
+                      r_boundary * np.sin(theta)], axis=-1)
+      return pts
+
+   def _min_algebraic_distance_scalar(self, x: float, y: float) -> float:
+      """Min algebraic distance at a single point (numpy, for bisection)."""
+      min_F = float('inf')
+      for k in range(self.n_sides):
+         alpha = self._angles_np[k]
+         cx, cy = self._centers_np[k]
+         a, b = self._semi_a_np[k], self._semi_b_np[k]
+         dx, dy = x - cx, y - cy
+         sa, ca = np.sin(alpha), np.cos(alpha)
+         pt = -sa * dx + ca * dy
+         pr = ca * dx + sa * dy
+         F = 1.0 - pt ** 2 / a ** 2 - pr ** 2 / b ** 2
+         min_F = min(min_F, F)
+      return min_F
+
+   def forward(self, crd: torch.Tensor) -> torch.Tensor:
+      dists = self._algebraic_distances_torch(crd)
+      if self.preserve_zero_line:
+         result = dists[0]
+         for i in range(1, len(dists)):
+            result = smooth_min_preserve_zero(result, dists[i], eps=self.eps)
+      else:
+         result = dists[0]
+         for i in range(1, len(dists)):
+            result = smooth_min(result, dists[i], k=self.eps)
+      return result
+
+   def _algebraic_distances_torch(self, crd: torch.Tensor):
+      """Compute algebraic distance for each ellipse (torch, differentiable)."""
+      centers = crd.new_tensor(self._centers_np)
+      angles = crd.new_tensor(self._angles_np)
+      semi_a = crd.new_tensor(self._semi_a_np)
+      semi_b = crd.new_tensor(self._semi_b_np)
+
+      dists = []
+      for k in range(self.n_sides):
+         dx = crd[..., 0] - centers[k, 0]
+         dy = crd[..., 1] - centers[k, 1]
+         cos_a = torch.cos(angles[k])
+         sin_a = torch.sin(angles[k])
+
+         proj_t = -sin_a * dx + cos_a * dy  # tangential
+         proj_r = cos_a * dx + sin_a * dy   # radial
+
+         F_k = 1.0 - (proj_t ** 2 / semi_a[k] ** 2
+                       + proj_r ** 2 / semi_b[k] ** 2)
+         dists.append(F_k)
+      return dists
+
+   def algebraic_distances_numpy(self, x, y):
+      """Compute individual algebraic distances as numpy arrays."""
+      x = np.asarray(x, dtype=np.float64)
+      y = np.asarray(y, dtype=np.float64)
+      dists = []
+      for k in range(self.n_sides):
+         alpha = self._angles_np[k]
+         cx, cy = self._centers_np[k]
+         a, b = self._semi_a_np[k], self._semi_b_np[k]
+         dx = x - cx
+         dy = y - cy
+         sa, ca = np.sin(alpha), np.cos(alpha)
+         pt = -sa * dx + ca * dy
+         pr = ca * dx + sa * dy
+         F = 1.0 - pt ** 2 / a ** 2 - pr ** 2 / b ** 2
+         dists.append(F)
+      return dists
+
+   def min_algebraic_distance_numpy(self, x, y):
+      """Min algebraic distance over all ellipses (numpy)."""
+      dists = self.algebraic_distances_numpy(x, y)
+      return np.min(np.stack(dists, axis=-1), axis=-1)
+
+   def create_contour_plot(self, resolution=200):
+      x = np.linspace(-1.2, 1.2, resolution)
+      y = np.linspace(-1.2, 1.2, resolution)
+      X, Y = np.meshgrid(x, y)
+      crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+      with torch.no_grad():
+         Z = self.forward(crd).cpu().numpy()
+      plt.contourf(X, Y, Z, levels=50, cmap='viridis')
+      plt.colorbar(label='w (algebraic distance)')
+      plt.contour(X, Y, Z, levels=[0], colors='k', linewidths=2)
+      bp = self._boundary_pts
+      plt.plot(np.append(bp[:, 0], bp[0, 0]),
+               np.append(bp[:, 1], bp[0, 1]),
+               'r--', linewidth=1, label='boundary')
+      plt.xlabel('x')
+      plt.ylabel('y')
+      plt.title('Ellipse pentagon (algebraic distance, R-function)')
+      plt.legend()
+      plt.gca().set_aspect('equal')
+      plt.show()
+
+
 if __name__ == "__main__":
    analitical_model2 = AnaliticalDistanceLshape()
    model = analitical_model2

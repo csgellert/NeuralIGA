@@ -439,10 +439,13 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                 current_importance_sampling_coeff = importance_sampling_coeff
             if isinstance(importance_sampling_params, (list, tuple)):
                 current_importance_sampling_params = importance_sampling_params[idx]
+            else:
+                current_importance_sampling_params = importance_sampling_params
+
             if isinstance(grad_on_bnd_coeff, (list, tuple)):
                 current_grad_on_bnd_coeff = grad_on_bnd_coeff[idx]
             else:
-                current_importance_sampling_params = importance_sampling_params
+                current_grad_on_bnd_coeff = grad_on_bnd_coeff
 
             if current_eikon_coeff > 0.0:
                 # Eikonal term
@@ -451,7 +454,8 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                 grads = torch.autograd.grad(outputs=pred_eik, inputs=pts,
                                             grad_outputs=torch.ones_like(pred_eik),
                                             create_graph=True, retain_graph=True)[0]
-                eikonal_term = criterion(grads.norm(dim=1), torch.ones_like(pred_eik))
+                grads_norm = grads.norm(dim=1)
+                eikonal_term = criterion(grads_norm, torch.ones_like(grads_norm))
                 
                 if eikon_near_bnd:  
                     if data_gen_mode == 'bspline': raise NotImplementedError("Eikonal near boundary not implemented for bspline data generation.")
@@ -461,7 +465,8 @@ def train_models_with_extras(model_list, num_epochs = 100, batch_size=10000, fun
                     near_bndr_grads = torch.autograd.grad(outputs=near_bndr_pred_eik, inputs=near_bndr_pts,
                                                           grad_outputs=torch.ones_like(near_bndr_pred_eik),
                                                           create_graph=True, retain_graph=True)[0]
-                    near_bndr_eikonal_term = criterion(near_bndr_grads.norm(dim=1), torch.ones_like(near_bndr_pred_eik))
+                    near_grads_norm = near_bndr_grads.norm(dim=1)
+                    near_bndr_eikonal_term = criterion(near_grads_norm, torch.ones_like(near_grads_norm))
                 eikonal_term = eikonal_term  + (near_bndr_eikonal_term if eikon_near_bnd else 0.0)
                 eikonal_term = eikonal_term / (1.0  + float(eikon_near_bnd))
                 loss += current_eikon_coeff * eikonal_term

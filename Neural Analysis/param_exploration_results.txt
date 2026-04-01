@@ -1,0 +1,33 @@
+# Parameter Exploration Results for Neural Network Correction
+# Goal: Minimize derivative and second derivative errors
+# Date: 2026-02-19
+
+Configuration Format:
+- LR = learning rate
+- Architecture = [input_dim, hidden1, hidden2, hidden3, output_dim]
+- omega_first / omega_hidden = SIREN frequency parameters
+
+==============================================================================
+BASELINE (from notebook):
+LR: 1e-5
+Architecture: [3, 256, 256, 256, 1]
+omega_first: 160.0, omega_hidden: 160.0
+NUM_EPOCHS: 300
+
+Results:
+  u_x   max: 1.532e-03 → 1.031e-03  (1.5x improvement)
+  u_y   max: 3.350e-03 → 9.994e-04  (3.4x improvement)
+  u_xx  max: 5.293e-01 → 1.193e-01  (4.4x improvement)
+  u_yy  max: 1.692e+00 → 1.640e-01  (10.3x improvement)
+
+  u_x   mean: 5.178e-06 → 5.619e-05  (0.1x - WORSE!)
+  u_y   mean: 6.899e-06 → 5.701e-05  (0.1x - WORSE!)
+  u_xx  mean: 1.122e-03 → 5.665e-03  (0.2x - WORSE!)
+  u_yy  mean: 1.511e-03 → 5.726e-03  (0.3x - WORSE!)
+
+  |grad err| max: 3.556e-03 → 1.173e-03  (3.0x)
+  |hess err| max: 1.692e+00 → 1.934e-01  (8.7x)
+
+NOTE: Mean errors getting WORSE suggests overfitting near boundary!
+
+==============================================================================

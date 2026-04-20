@@ -126,6 +126,66 @@ def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}):
             return_numpy=False,
         )
         return pts, target
+    elif fun_num == 3:  # Curved pentagon-like shape defined by cubic B-spline spans
+        radius = data_gen_params.get('radius', 0.5)
+        center = data_gen_params.get('center', (0.0, 0.0))
+        rotation = data_gen_params.get('rotation', 0.0)
+        bulge = data_gen_params.get('bulge', 0.18)
+        samples_per_side = data_gen_params.get('samples_per_side', 128)
+
+        cache = SDF._build_curved_pentagon_bspline_cache(
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+        )
+        x_min, x_max, y_min, y_max = cache['bbox']
+        pad = 0.05 * radius
+        x_min -= pad
+        x_max += pad
+        y_min -= pad
+        y_max += pad
+
+        collected = []
+        num_collected = 0
+        while num_collected < batch_size:
+            n_missing = batch_size - num_collected
+            n_candidates = max(2048, n_missing * 3)
+            candidates = torch.empty(n_candidates, 2, device=device)
+            candidates[:, 0] = x_min + (x_max - x_min) * torch.rand(n_candidates, device=device)
+            candidates[:, 1] = y_min + (y_max - y_min) * torch.rand(n_candidates, device=device)
+
+            inside_mask = SDF.is_inside_curved_pentagon_bspline(
+                candidates[:, 0],
+                candidates[:, 1],
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                bulge=bulge,
+                samples_per_side=samples_per_side,
+            )
+            if not torch.is_tensor(inside_mask):
+                inside_mask = torch.as_tensor(inside_mask, device=device, dtype=torch.bool)
+
+            inside_points = candidates[inside_mask]
+            if inside_points.shape[0] > 0:
+                take_n = min(n_missing, inside_points.shape[0])
+                collected.append(inside_points[:take_n])
+                num_collected += take_n
+
+        pts = torch.cat(collected, dim=0)
+        target = SDF.curved_pentagon_bspline_side_distances(
+            pts[:, 0],
+            pts[:, 1],
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+            return_numpy=False,
+        )
+        return pts, target
     else:
         raise NotImplementedError(f"Data generation for fun_num={fun_num} not implemented in this snippet.")
 
@@ -194,6 +254,24 @@ def generate_domain_boundary_points(num_points, fun_num=1, device=None, data_gen
         if return_side_indices:
             return pts, side_idx
         return pts
+
+    if fun_num == 3:
+        radius = data_gen_params.get('radius', 0.5)
+        center = data_gen_params.get('center', (0.0, 0.0))
+        rotation = data_gen_params.get('rotation', 0.0)
+        bulge = data_gen_params.get('bulge', 0.18)
+        samples_per_side = data_gen_params.get('samples_per_side', 128)
+        bnd = SDF.generate_curved_pentagon_bspline_boundary_points(
+            num_points,
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+            device=device,
+            return_side_indices=return_side_indices,
+        )
+        return bnd
 
     raise NotImplementedError(f"Boundary point generation for fun_num={fun_num} is not implemented")
 
@@ -330,6 +408,26 @@ def _evaluate_ground_truth_on_points(pts, fun_num=1, data_gen_params={}):
             radius=radius,
             center=center,
             apex=apex,
+            return_numpy=True,
+        )
+        gt = torch.as_tensor(gt_np, device=pts.device, dtype=pts.dtype)
+        if gt.ndim == 1:
+            gt = gt.unsqueeze(1)
+        return gt
+    if fun_num == 3:
+        radius = data_gen_params.get('radius', 0.5)
+        center = data_gen_params.get('center', (0.0, 0.0))
+        rotation = data_gen_params.get('rotation', 0.0)
+        bulge = data_gen_params.get('bulge', 0.18)
+        samples_per_side = data_gen_params.get('samples_per_side', 128)
+        gt_np = SDF.curved_pentagon_bspline_side_distances(
+            pts[:, 0].detach().cpu().numpy(),
+            pts[:, 1].detach().cpu().numpy(),
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
             return_numpy=True,
         )
         gt = torch.as_tensor(gt_np, device=pts.device, dtype=pts.dtype)
@@ -608,6 +706,23 @@ def plot_nn_distance_fields(model, resolution=200, extent=(-1.0, 1.0, -1.0, 1.0)
                 return_numpy=True,
             )
             domain_mask = np.asarray(inside, dtype=bool).reshape(render_resolution, render_resolution)
+        elif fun_num == 3:
+            radius = data_gen_params.get('radius', 0.5)
+            center = data_gen_params.get('center', (0.0, 0.0))
+            rotation = data_gen_params.get('rotation', 0.0)
+            bulge = data_gen_params.get('bulge', 0.18)
+            samples_per_side = data_gen_params.get('samples_per_side', 128)
+            inside = SDF.is_inside_curved_pentagon_bspline(
+                grid_points[:, 0].detach().cpu().numpy(),
+                grid_points[:, 1].detach().cpu().numpy(),
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                bulge=bulge,
+                samples_per_side=samples_per_side,
+                return_numpy=True,
+            )
+            domain_mask = np.asarray(inside, dtype=bool).reshape(render_resolution, render_resolution)
         else:
             raise NotImplementedError(f"Domain masking for fun_num={fun_num} is not implemented")
     else:
@@ -700,6 +815,23 @@ def plot_ground_truth_distance_fields(resolution=200, extent=(-1.0, 1.0, -1.0, 1
                 radius=radius,
                 center=center,
                 apex=apex,
+                return_numpy=True,
+            )
+            domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
+        elif fun_num == 3:
+            radius = data_gen_params.get('radius', 0.5)
+            center = data_gen_params.get('center', (0.0, 0.0))
+            rotation = data_gen_params.get('rotation', 0.0)
+            bulge = data_gen_params.get('bulge', 0.18)
+            samples_per_side = data_gen_params.get('samples_per_side', 128)
+            inside = SDF.is_inside_curved_pentagon_bspline(
+                grid_points[:, 0].detach().cpu().numpy(),
+                grid_points[:, 1].detach().cpu().numpy(),
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                bulge=bulge,
+                samples_per_side=samples_per_side,
                 return_numpy=True,
             )
             domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
@@ -811,6 +943,23 @@ def plot_nn_prediction_error(model, fun_num=1, resolution=200, extent=(-1.0, 1.0
                 return_numpy=True,
             )
             domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
+        elif fun_num == 3:
+            radius = data_gen_params.get('radius', 0.5)
+            center = data_gen_params.get('center', (0.0, 0.0))
+            rotation = data_gen_params.get('rotation', 0.0)
+            bulge = data_gen_params.get('bulge', 0.18)
+            samples_per_side = data_gen_params.get('samples_per_side', 128)
+            inside = SDF.is_inside_curved_pentagon_bspline(
+                grid_points[:, 0].detach().cpu().numpy(),
+                grid_points[:, 1].detach().cpu().numpy(),
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                bulge=bulge,
+                samples_per_side=samples_per_side,
+                return_numpy=True,
+            )
+            domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
         else:
             raise NotImplementedError(f"Domain masking for fun_num={fun_num} is not implemented")
     else:
@@ -918,6 +1067,23 @@ def plot_local_per_side_gradient_error(model, resolution=200, extent=(-1.0, 1.0,
                 radius=radius,
                 center=center,
                 apex=apex,
+                return_numpy=True,
+            )
+            domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
+        elif fun_num == 3:
+            radius = data_gen_params.get('radius', 0.5)
+            center = data_gen_params.get('center', (0.0, 0.0))
+            rotation = data_gen_params.get('rotation', 0.0)
+            bulge = data_gen_params.get('bulge', 0.18)
+            samples_per_side = data_gen_params.get('samples_per_side', 128)
+            inside = SDF.is_inside_curved_pentagon_bspline(
+                grid_points[:, 0].detach().cpu().numpy(),
+                grid_points[:, 1].detach().cpu().numpy(),
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                bulge=bulge,
+                samples_per_side=samples_per_side,
                 return_numpy=True,
             )
             domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
@@ -1069,6 +1235,23 @@ def plot_local_per_side_second_derivative(model, resolution=200, extent=(-1.0, 1
                 radius=radius,
                 center=center,
                 apex=apex,
+                return_numpy=True,
+            )
+            domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
+        elif fun_num == 3:
+            radius = data_gen_params.get('radius', 0.5)
+            center = data_gen_params.get('center', (0.0, 0.0))
+            rotation = data_gen_params.get('rotation', 0.0)
+            bulge = data_gen_params.get('bulge', 0.18)
+            samples_per_side = data_gen_params.get('samples_per_side', 128)
+            inside = SDF.is_inside_curved_pentagon_bspline(
+                grid_points[:, 0].detach().cpu().numpy(),
+                grid_points[:, 1].detach().cpu().numpy(),
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                bulge=bulge,
+                samples_per_side=samples_per_side,
                 return_numpy=True,
             )
             domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)

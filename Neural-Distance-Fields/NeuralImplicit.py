@@ -352,8 +352,9 @@ def evaluate_model_random_points(
     """
     Evaluate model quality on N random points for the selected function case.
 
-    Metrics are computed for value prediction and gradient-norm consistency
-    (Eikonal-type error, where |grad(phi)| should be 1).
+    Metrics are computed for value prediction, gradient-norm consistency
+    (Eikonal-type error, where |grad(phi)| should be 1), and Hessian-diagonal
+    consistency (where d2phi/dx2 and d2phi/dy2 should both be 0).
 
     Args:
         model: torch model that maps (N, 2) -> (N, n_fields).
@@ -418,6 +419,7 @@ def evaluate_model_random_points(
 
     n_fields = pred.shape[1]
     grad_norm_error_per_side = []
+    hessian_diag_error_per_side = []
     mean_abs_error_per_side = []
     max_abs_error_per_side = []
     l2_error_per_side = []
@@ -426,12 +428,34 @@ def evaluate_model_random_points(
         grad_i = torch.autograd.grad(
             outputs=pred[:, i].sum(),
             inputs=pts_eval,
-            create_graph=False,
-            retain_graph=(i < n_fields - 1),
+            create_graph=True,
+            # We need this graph for second-derivative calls below.
+            retain_graph=True,
         )[0]
         grad_norm_i = torch.norm(grad_i, dim=1)
         grad_norm_err_i = torch.abs(grad_norm_i - 1.0)
         grad_norm_error_per_side.append(grad_norm_err_i)
+
+        d2phi_dx2_i = torch.autograd.grad(
+            outputs=grad_i[:, 0].sum(),
+            inputs=pts_eval,
+            create_graph=False,
+            retain_graph=True,
+        )[0][:, 0]
+        d2phi_dy2_i = torch.autograd.grad(
+            outputs=grad_i[:, 1].sum(),
+            inputs=pts_eval,
+            create_graph=False,
+            # Keep graph for next side's first-derivative backward pass.
+            retain_graph=(i < n_fields - 1),
+        )[0][:, 1]
+
+        # Ground truth Hessian diagonal is zero for signed distance to linear/arc sides.
+        hessian_diag_err_i = torch.stack([
+            torch.abs(d2phi_dx2_i),
+            torch.abs(d2phi_dy2_i),
+        ], dim=1)
+        hessian_diag_error_per_side.append(hessian_diag_err_i)
 
         err_i = err[:, i]
         mean_abs_error_per_side.append(torch.mean(torch.abs(err_i)).item())
@@ -443,6 +467,11 @@ def evaluate_model_random_points(
     grad_max_abs_error = grad_norm_error.max().item()
     grad_l2_error = torch.sqrt(torch.mean(grad_norm_error ** 2)).item()
 
+    hessian_diag_error = torch.stack(hessian_diag_error_per_side, dim=1)
+    hessian_diag_mean_abs_error = hessian_diag_error.mean().item()
+    hessian_diag_max_abs_error = hessian_diag_error.max().item()
+    hessian_diag_l2_error = torch.sqrt(torch.mean(hessian_diag_error ** 2)).item()
+
     results = {
         "N": int(N),
         "function_case": int(function_case),
@@ -453,6 +482,9 @@ def evaluate_model_random_points(
             "grad_norm_mean_abs_error": grad_mean_abs_error,
             "grad_norm_max_abs_error": grad_max_abs_error,
             "grad_norm_l2_error": grad_l2_error,
+            "hessian_diag_mean_abs_error": hessian_diag_mean_abs_error,
+            "hessian_diag_max_abs_error": hessian_diag_max_abs_error,
+            "hessian_diag_l2_error": hessian_diag_l2_error,
         },
     }
 
@@ -460,6 +492,7 @@ def evaluate_model_random_points(
         side_metrics = []
         for i in range(n_fields):
             gerr_i = grad_norm_error[:, i]
+            herr_i = hessian_diag_error[:, i, :]
             side_metrics.append(
                 {
                     "side": i,
@@ -469,6 +502,11 @@ def evaluate_model_random_points(
                     "grad_norm_mean_abs_error": gerr_i.mean().item(),
                     "grad_norm_max_abs_error": gerr_i.max().item(),
                     "grad_norm_l2_error": torch.sqrt(torch.mean(gerr_i ** 2)).item(),
+                    "hessian_diag_mean_abs_error": herr_i.mean().item(),
+                    "hessian_diag_max_abs_error": herr_i.max().item(),
+                    "hessian_diag_l2_error": torch.sqrt(torch.mean(herr_i ** 2)).item(),
+                    "hessian_xx_mean_abs_error": herr_i[:, 0].mean().item(),
+                    "hessian_yy_mean_abs_error": herr_i[:, 1].mean().item(),
                 }
             )
         results["per_side"] = side_metrics
@@ -484,6 +522,10 @@ def evaluate_model_random_points(
             f"  Grad-norm errors (|grad|-1): mean_abs={g['grad_norm_mean_abs_error']:.6e}, "
             f"max_abs={g['grad_norm_max_abs_error']:.6e}, L2={g['grad_norm_l2_error']:.6e}"
         )
+        print(
+            f"  Hessian-diagonal errors (target 0): mean_abs={g['hessian_diag_mean_abs_error']:.6e}, "
+            f"max_abs={g['hessian_diag_max_abs_error']:.6e}, L2={g['hessian_diag_l2_error']:.6e}"
+        )
         if per_side_report and "per_side" in results:
             for sm in results["per_side"]:
                 print(
@@ -491,7 +533,11 @@ def evaluate_model_random_points(
                     f"value(mean_abs={sm['value_mean_abs_error']:.6e}, "
                     f"max_abs={sm['value_max_abs_error']:.6e}, L2={sm['value_l2_error']:.6e}) | "
                     f"grad(|grad|-1 mean_abs={sm['grad_norm_mean_abs_error']:.6e}, "
-                    f"max_abs={sm['grad_norm_max_abs_error']:.6e}, L2={sm['grad_norm_l2_error']:.6e})"
+                    f"max_abs={sm['grad_norm_max_abs_error']:.6e}, L2={sm['grad_norm_l2_error']:.6e}) | "
+                    f"hdiag(mean_abs={sm['hessian_diag_mean_abs_error']:.6e}, "
+                    f"max_abs={sm['hessian_diag_max_abs_error']:.6e}, L2={sm['hessian_diag_l2_error']:.6e}, "
+                    f"xx_mean={sm['hessian_xx_mean_abs_error']:.6e}, "
+                    f"yy_mean={sm['hessian_yy_mean_abs_error']:.6e})"
                 )
 
     return results
@@ -906,6 +952,160 @@ def plot_local_per_side_gradient_error(model, resolution=200, extent=(-1.0, 1.0,
         plt.show()
 
     return fig, axes, grad_norm_error_np
+
+
+def plot_local_per_side_second_derivative(model, resolution=200, extent=(-1.0, 1.0, -1.0, 1.0), *, device=None,
+                                          fun_num=1, data_gen_params={}, levels=64, cmap='coolwarm',
+                                          component='laplacian', absolute=False,
+                                          mask_outside_domain=True, show=True):
+    """
+    Plot local distribution of per-side second derivatives.
+
+    For each output field phi_i, this function computes one Hessian-diagonal
+    component map and displays one contour plot per side:
+        component='xx' -> d2phi_i/dx2
+        component='yy' -> d2phi_i/dy2
+        component='laplacian' -> d2phi_i/dx2 + d2phi_i/dy2
+
+    Since analytical target is zero, ``absolute=True`` is useful to view local
+    magnitude of deviation from zero.
+    """
+    if component not in ('xx', 'yy', 'laplacian'):
+        raise ValueError("component must be one of: 'xx', 'yy', 'laplacian'")
+
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    model.to(device)
+    model.eval()
+
+    x_min, x_max, y_min, y_max = extent
+    X, Y = torch.meshgrid(
+        torch.linspace(x_min, x_max, resolution, device=device),
+        torch.linspace(y_min, y_max, resolution, device=device),
+    )
+    grid_points = torch.stack([X.ravel(), Y.ravel()], dim=-1).requires_grad_(True)
+
+    pred = model(grid_points)
+    if pred.ndim == 1:
+        pred = pred.unsqueeze(1)
+
+    n_fields = pred.shape[1]
+    second_derivative_maps = []
+
+    for i in range(n_fields):
+        grads_i = torch.autograd.grad(
+            outputs=pred[:, i].sum(),
+            inputs=grid_points,
+            create_graph=True,
+            retain_graph=True,
+        )[0]
+
+        if component == 'xx':
+            second_i = torch.autograd.grad(
+                outputs=grads_i[:, 0].sum(),
+                inputs=grid_points,
+                create_graph=False,
+                retain_graph=(i < n_fields - 1),
+            )[0][:, 0]
+        elif component == 'yy':
+            second_i = torch.autograd.grad(
+                outputs=grads_i[:, 1].sum(),
+                inputs=grid_points,
+                create_graph=False,
+                retain_graph=(i < n_fields - 1),
+            )[0][:, 1]
+        else:  # laplacian
+            d2phi_dx2_i = torch.autograd.grad(
+                outputs=grads_i[:, 0].sum(),
+                inputs=grid_points,
+                create_graph=False,
+                retain_graph=True,
+            )[0][:, 0]
+            d2phi_dy2_i = torch.autograd.grad(
+                outputs=grads_i[:, 1].sum(),
+                inputs=grid_points,
+                create_graph=False,
+                retain_graph=(i < n_fields - 1),
+            )[0][:, 1]
+            second_i = d2phi_dx2_i + d2phi_dy2_i
+
+        if absolute:
+            second_i = torch.abs(second_i)
+
+        second_derivative_maps.append(second_i.reshape(resolution, resolution).detach().cpu().numpy())
+
+    second_derivative_np = np.stack(second_derivative_maps, axis=2)
+    X_np = X.detach().cpu().numpy()
+    Y_np = Y.detach().cpu().numpy()
+
+    if mask_outside_domain:
+        if fun_num == 1:
+            n_sides = data_gen_params.get('n_sides', 5)
+            radius = data_gen_params.get('radius', 0.5)
+            center = data_gen_params.get('center', (0.0, 0.0))
+            rotation = data_gen_params.get('rotation', 0.0)
+            signed_dist = SDF.regular_ngon_side_signed_distances(
+                grid_points[:, 0].detach().cpu().numpy(),
+                grid_points[:, 1].detach().cpu().numpy(),
+                n_sides=n_sides,
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                use_sign=True,
+                return_numpy=True,
+            )
+            signed_dist_np = np.asarray(signed_dist)
+            if signed_dist_np.ndim == 1:
+                signed_dist_np = signed_dist_np[:, None]
+            domain_mask = np.all(signed_dist_np >= 0.0, axis=1).reshape(resolution, resolution)
+        elif fun_num == 2:
+            radius = data_gen_params.get('radius', 0.5)
+            center = data_gen_params.get('center', (0.0, 0.0))
+            apex = data_gen_params.get('apex', (center[0], center[1] - radius))
+            inside = SDF.is_inside_semicircle_triangle_union(
+                grid_points[:, 0].detach().cpu().numpy(),
+                grid_points[:, 1].detach().cpu().numpy(),
+                radius=radius,
+                center=center,
+                apex=apex,
+                return_numpy=True,
+            )
+            domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
+        else:
+            raise NotImplementedError(f"Domain masking for fun_num={fun_num} is not implemented")
+    else:
+        domain_mask = np.ones((resolution, resolution), dtype=bool)
+
+    n_cols = int(np.ceil(np.sqrt(n_fields)))
+    n_rows = int(np.ceil(n_fields / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.2 * n_cols, 3.8 * n_rows), squeeze=False)
+    axes_flat = axes.ravel()
+
+    vmax = float(np.max(np.abs(second_derivative_np))) if second_derivative_np.size else 1.0
+
+    for i in range(n_fields):
+        ax = axes_flat[i]
+        z = second_derivative_np[:, :, i]
+        z_masked = np.ma.array(z, mask=~domain_mask)
+        if absolute:
+            cf = ax.contourf(X_np, Y_np, z_masked, levels=levels, cmap='hot', vmin=0.0, vmax=vmax)
+        else:
+            cf = ax.contourf(X_np, Y_np, z_masked, levels=levels, cmap=cmap, vmin=-vmax, vmax=vmax)
+        ax.set_title(f'Second derivative side {i} ({component})')
+        ax.set_aspect('equal', adjustable='box')
+        ax.set_xlabel('x')
+        ax.set_ylabel('y')
+        fig.colorbar(cf, ax=ax, fraction=0.046, pad=0.04)
+
+    for j in range(n_fields, n_rows * n_cols):
+        axes_flat[j].axis('off')
+
+    fig.tight_layout()
+    if show:
+        plt.show()
+
+    return fig, axes, second_derivative_np
 
 
 def plot_model_weight_per_layer_hyst(model):

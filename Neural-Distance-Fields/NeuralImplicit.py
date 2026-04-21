@@ -28,9 +28,203 @@ def get_gradient_error(model, grds_gt, pts,metric='L1'):
         raise NotImplementedError(f"Metric {metric} not implemented")
     return length_error, mean_similarity
 
-def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}):
+
+def _signed_distance_to_oriented_segment(points, start, end, inside_ref_point):
+    """Signed point-to-segment distance with sign from oriented-side test."""
+    edge = end - start
+    edge_len = torch.linalg.norm(edge)
+    if float(edge_len.item()) <= 1e-14:
+        d = torch.linalg.norm(points - start.unsqueeze(0), dim=1)
+        return d
+
+    edge_dir = edge / edge_len
+    normal_in = torch.stack([-edge_dir[1], edge_dir[0]])
+    if torch.dot(inside_ref_point - start, normal_in) < 0.0:
+        normal_in = -normal_in
+
+    delta = points - start.unsqueeze(0)
+    t = torch.einsum("pi,i->p", delta, edge_dir)
+    t = torch.clamp(t, 0.0, edge_len)
+    closest = start.unsqueeze(0) + t.unsqueeze(1) * edge_dir.unsqueeze(0)
+    unsigned = torch.linalg.norm(points - closest, dim=1)
+
+    side_val = torch.einsum("pi,i->p", points - closest, normal_in)
+    sign = torch.where(side_val >= 0.0, torch.ones_like(unsigned), -torch.ones_like(unsigned))
+    return unsigned * sign
+
+
+def _curved_side_signed_distance(points, polyline, device, dtype):
+    """Signed distance to one curved side polyline using inward normal at closest segment."""
+    poly_t = torch.as_tensor(polyline, device=device, dtype=dtype)
+    start = poly_t[:-1]
+    end = poly_t[1:]
+    edges = end - start
+
+    edge_len = torch.linalg.norm(edges, dim=1, keepdim=True)
+    edge_len = torch.clamp(edge_len, min=1e-14)
+    edge_dir = edges / edge_len
+    normal_in = torch.stack((-edge_dir[:, 1], edge_dir[:, 0]), dim=1)
+
+    delta = points[:, None, :] - start[None, :, :]
+    t = torch.einsum("pni,ni->pn", delta, edge_dir)
+    seg_len = edge_len.squeeze(1)
+    t = torch.clamp(t, min=0.0)
+    t = torch.minimum(t, seg_len[None, :])
+    closest = start[None, :, :] + t[:, :, None] * edge_dir[None, :, :]
+
+    d_all = torch.linalg.norm(points[:, None, :] - closest, dim=2)
+    min_idx = torch.argmin(d_all, dim=1)
+    unsigned = d_all[torch.arange(points.shape[0], device=device), min_idx]
+
+    closest_sel = closest[torch.arange(points.shape[0], device=device), min_idx, :]
+    normal_sel = normal_in[min_idx]
+    side_val = torch.einsum("pi,pi->p", points - closest_sel, normal_sel)
+    sign = torch.where(side_val >= 0.0, torch.ones_like(unsigned), -torch.ones_like(unsigned))
+    return unsigned * sign
+
+
+def _compute_signed_side_distances(pts, fun_num=1, data_gen_params={}):
+    """Per-side signed distances where positive means the point is on the interior side of that boundary piece."""
+    device = pts.device
+    dtype = pts.dtype
+
+    if fun_num == 1:
+        n_sides = data_gen_params.get('n_sides', 5)
+        radius = data_gen_params.get('radius', 0.5)
+        center = data_gen_params.get('center', (0.0, 0.0))
+        rotation = data_gen_params.get('rotation', 0.0)
+
+        side_signed = SDF.regular_ngon_side_signed_distances(
+            pts[:, 0],
+            pts[:, 1],
+            n_sides=n_sides,
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            use_sign=True,
+            return_numpy=False,
+        )
+        if not torch.is_tensor(side_signed):
+            side_signed = torch.as_tensor(side_signed, device=device, dtype=dtype)
+        else:
+            side_signed = side_signed.to(device=device, dtype=dtype)
+
+        inside_mask = torch.all(side_signed >= 0.0, dim=1)
+        return side_signed, inside_mask
+
+    if fun_num == 2:
+        radius = data_gen_params.get('radius', 0.5)
+        center = data_gen_params.get('center', (0.0, 0.0))
+        apex = data_gen_params.get('apex', (center[0], center[1] - radius))
+
+        cx, cy = center
+        ax, ay = apex
+        a = torch.tensor([cx - radius, cy], device=device, dtype=dtype)
+        b = torch.tensor([cx + radius, cy], device=device, dtype=dtype)
+        c = torch.tensor([ax, ay], device=device, dtype=dtype)
+        ref = torch.tensor([cx, cy], device=device, dtype=dtype)
+
+        d_unsigned = SDF.semicircle_triangle_side_distances(
+            pts[:, 0],
+            pts[:, 1],
+            radius=radius,
+            center=center,
+            apex=apex,
+            return_numpy=False,
+        )
+        if not torch.is_tensor(d_unsigned):
+            d_unsigned = torch.as_tensor(d_unsigned, device=device, dtype=dtype)
+        else:
+            d_unsigned = d_unsigned.to(device=device, dtype=dtype)
+
+        s_left = _signed_distance_to_oriented_segment(pts, a, c, ref)
+        s_right = _signed_distance_to_oriented_segment(pts, c, b, ref)
+
+        rho = torch.linalg.norm(pts - ref.unsqueeze(0), dim=1)
+        s_arc_sign = radius - rho
+        s_arc = d_unsigned[:, 2] * torch.where(s_arc_sign >= 0.0, torch.ones_like(s_arc_sign), -torch.ones_like(s_arc_sign))
+
+        side_signed = torch.stack((
+            d_unsigned[:, 0] * torch.where(s_left >= 0.0, torch.ones_like(s_left), -torch.ones_like(s_left)),
+            d_unsigned[:, 1] * torch.where(s_right >= 0.0, torch.ones_like(s_right), -torch.ones_like(s_right)),
+            s_arc,
+        ), dim=1)
+
+        inside_mask = SDF.is_inside_semicircle_triangle_union(
+            pts[:, 0],
+            pts[:, 1],
+            radius=radius,
+            center=center,
+            apex=apex,
+        )
+        if not torch.is_tensor(inside_mask):
+            inside_mask = torch.as_tensor(inside_mask, device=device, dtype=torch.bool)
+        else:
+            inside_mask = inside_mask.to(device=device, dtype=torch.bool)
+        return side_signed, inside_mask
+
+    if fun_num == 3:
+        radius = data_gen_params.get('radius', 0.5)
+        center = data_gen_params.get('center', (0.0, 0.0))
+        rotation = data_gen_params.get('rotation', 0.0)
+        bulge = data_gen_params.get('bulge', 0.18)
+        samples_per_side = data_gen_params.get('samples_per_side', 128)
+
+        d_unsigned = SDF.curved_pentagon_bspline_side_distances(
+            pts[:, 0],
+            pts[:, 1],
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+            return_numpy=False,
+        )
+        if not torch.is_tensor(d_unsigned):
+            d_unsigned = torch.as_tensor(d_unsigned, device=device, dtype=dtype)
+        else:
+            d_unsigned = d_unsigned.to(device=device, dtype=dtype)
+
+        cache = SDF._build_curved_pentagon_bspline_cache(
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+        )
+        side_polylines = cache['side_polylines']
+
+        signed_list = []
+        for i, poly in enumerate(side_polylines):
+            s_i = _curved_side_signed_distance(pts, poly, device, dtype)
+            signed_list.append(
+                d_unsigned[:, i] * torch.where(s_i >= 0.0, torch.ones_like(s_i), -torch.ones_like(s_i))
+            )
+        side_signed = torch.stack(signed_list, dim=1)
+
+        inside_mask = SDF.is_inside_curved_pentagon_bspline(
+            pts[:, 0],
+            pts[:, 1],
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+        )
+        if not torch.is_tensor(inside_mask):
+            inside_mask = torch.as_tensor(inside_mask, device=device, dtype=torch.bool)
+        else:
+            inside_mask = inside_mask.to(device=device, dtype=torch.bool)
+        return side_signed, inside_mask
+
+    raise NotImplementedError(f"Signed side distances for fun_num={fun_num} are not implemented")
+
+def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}, epsilon=0.0):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    epsilon = float(epsilon)
+    if epsilon < 0.0:
+        raise ValueError("epsilon must be >= 0")
     if fun_num == 1: #Ngon
         n_sides = data_gen_params.get('n_sides', 5)
         radius = data_gen_params.get('radius', 0.5)
@@ -40,39 +234,51 @@ def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}):
         # Rejection sampling in the bounding square, keeping only points inside the polygon.
         center_t = torch.tensor(center, device=device)
         collected = []
+        collected_side_negative = []
         num_collected = 0
         while num_collected < batch_size:
             n_missing = batch_size - num_collected
             n_candidates = max(1024, n_missing * 2)
-            candidates = torch.rand(n_candidates, 2, device=device) * radius * 2 - radius + center_t
+            sample_radius = radius + epsilon
+            candidates = torch.rand(n_candidates, 2, device=device) * sample_radius * 2 - sample_radius + center_t
 
-            signed_dist = SDF.regular_ngon_side_signed_distances(
-                candidates[:, 0],
-                candidates[:, 1],
-                n_sides=n_sides,
-                radius=radius,
-                center=center,
-                rotation=rotation,
-                use_sign=True,
-                return_numpy=False,
+            side_signed, inside_mask = _compute_signed_side_distances(
+                candidates, fun_num=fun_num, data_gen_params=data_gen_params
             )
-            if torch.is_tensor(signed_dist):
-                inside_mask = torch.all(signed_dist >= 0.0, dim=1)
-            else:
-                signed_dist_np = np.asarray(signed_dist)
-                inside_mask_np = np.all(signed_dist_np >= 0.0, axis=1)
-                inside_mask = torch.as_tensor(inside_mask_np, device=device, dtype=torch.bool)
-            inside_points = candidates[inside_mask]
+            side_dist = torch.abs(side_signed)
+            boundary_dist = torch.min(side_dist, dim=1).values
 
-            if inside_points.shape[0] > 0:
-                take_n = min(n_missing, inside_points.shape[0])
-                collected.append(inside_points[:take_n])
+            if epsilon > 0.0:
+                outside_near_mask = (~inside_mask) & (boundary_dist <= epsilon)
+                accept_mask = inside_mask | outside_near_mask
+                side_negative_candidates = (side_signed < 0.0) & (side_dist <= epsilon)
+            else:
+                accept_mask = inside_mask
+                side_negative_candidates = torch.zeros_like(side_dist, dtype=torch.bool)
+
+            accepted_points = candidates[accept_mask]
+            accepted_side_negative = side_negative_candidates[accept_mask]
+
+            if accepted_points.shape[0] > 0:
+                take_n = min(n_missing, accepted_points.shape[0])
+                collected.append(accepted_points[:take_n])
+                collected_side_negative.append(accepted_side_negative[:take_n])
                 num_collected += take_n
 
         pts = torch.cat(collected, dim=0)
         target = SDF.regular_ngon_side_signed_distances(
             pts[:, 0], pts[:, 1], n_sides=n_sides, radius=radius, center=center, rotation=rotation, return_numpy=False
         )
+        if not torch.is_tensor(target):
+            target = torch.as_tensor(target, device=device, dtype=pts.dtype)
+        else:
+            target = target.to(device=device, dtype=pts.dtype)
+        if target.ndim == 1:
+            target = target.unsqueeze(1)
+        if epsilon > 0.0:
+            side_negative_mask = torch.cat(collected_side_negative, dim=0)
+            if torch.any(side_negative_mask):
+                target = torch.where(side_negative_mask, -target, target)
         #apply mobius transformation for target y = (1+x)/(1-x)
 
         #target = (np.ones_like(target) - target) / (np.ones_like(target) + target)
@@ -86,12 +292,14 @@ def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}):
         cx, cy = center
         ax, ay = apex
         # Sampling bbox of the union domain.
-        x_min = min(cx - radius, cx + radius, ax) - 0.05 * radius
-        x_max = max(cx - radius, cx + radius, ax) + 0.05 * radius
-        y_min = min(cy, ay, cy + radius) - 0.05 * radius
-        y_max = max(cy, ay, cy + radius) + 0.05 * radius
+        pad = 0.05 * radius + epsilon
+        x_min = min(cx - radius, cx + radius, ax) - pad
+        x_max = max(cx - radius, cx + radius, ax) + pad
+        y_min = min(cy, ay, cy + radius) - pad
+        y_max = max(cy, ay, cy + radius) + pad
 
         collected = []
+        collected_side_negative = []
         num_collected = 0
         while num_collected < batch_size:
             n_missing = batch_size - num_collected
@@ -110,10 +318,26 @@ def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}):
             if not torch.is_tensor(inside_mask):
                 inside_mask = torch.as_tensor(inside_mask, device=device, dtype=torch.bool)
 
-            inside_points = candidates[inside_mask]
-            if inside_points.shape[0] > 0:
-                take_n = min(n_missing, inside_points.shape[0])
-                collected.append(inside_points[:take_n])
+            side_signed, _ = _compute_signed_side_distances(
+                candidates, fun_num=fun_num, data_gen_params=data_gen_params
+            )
+            side_dist = torch.abs(side_signed)
+            boundary_dist = torch.min(side_dist, dim=1).values
+
+            if epsilon > 0.0:
+                outside_near_mask = (~inside_mask) & (boundary_dist <= epsilon)
+                accept_mask = inside_mask | outside_near_mask
+                side_negative_candidates = (side_signed < 0.0) & (side_dist <= epsilon)
+            else:
+                accept_mask = inside_mask
+                side_negative_candidates = torch.zeros_like(side_dist, dtype=torch.bool)
+
+            accepted_points = candidates[accept_mask]
+            accepted_side_negative = side_negative_candidates[accept_mask]
+            if accepted_points.shape[0] > 0:
+                take_n = min(n_missing, accepted_points.shape[0])
+                collected.append(accepted_points[:take_n])
+                collected_side_negative.append(accepted_side_negative[:take_n])
                 num_collected += take_n
 
         pts = torch.cat(collected, dim=0)
@@ -125,6 +349,16 @@ def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}):
             apex=apex,
             return_numpy=False,
         )
+        if not torch.is_tensor(target):
+            target = torch.as_tensor(target, device=device, dtype=pts.dtype)
+        else:
+            target = target.to(device=device, dtype=pts.dtype)
+        if target.ndim == 1:
+            target = target.unsqueeze(1)
+        if epsilon > 0.0:
+            side_negative_mask = torch.cat(collected_side_negative, dim=0)
+            if torch.any(side_negative_mask):
+                target = torch.where(side_negative_mask, -target, target)
         return pts, target
     elif fun_num == 3:  # Curved pentagon-like shape defined by cubic B-spline spans
         radius = data_gen_params.get('radius', 0.5)
@@ -141,13 +375,14 @@ def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}):
             samples_per_side=samples_per_side,
         )
         x_min, x_max, y_min, y_max = cache['bbox']
-        pad = 0.05 * radius
+        pad = 0.05 * radius + epsilon
         x_min -= pad
         x_max += pad
         y_min -= pad
         y_max += pad
 
         collected = []
+        collected_side_negative = []
         num_collected = 0
         while num_collected < batch_size:
             n_missing = batch_size - num_collected
@@ -168,10 +403,26 @@ def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}):
             if not torch.is_tensor(inside_mask):
                 inside_mask = torch.as_tensor(inside_mask, device=device, dtype=torch.bool)
 
-            inside_points = candidates[inside_mask]
-            if inside_points.shape[0] > 0:
-                take_n = min(n_missing, inside_points.shape[0])
-                collected.append(inside_points[:take_n])
+            side_signed, _ = _compute_signed_side_distances(
+                candidates, fun_num=fun_num, data_gen_params=data_gen_params
+            )
+            side_dist = torch.abs(side_signed)
+            boundary_dist = torch.min(side_dist, dim=1).values
+
+            if epsilon > 0.0:
+                outside_near_mask = (~inside_mask) & (boundary_dist <= epsilon)
+                accept_mask = inside_mask | outside_near_mask
+                side_negative_candidates = (side_signed < 0.0) & (side_dist <= epsilon)
+            else:
+                accept_mask = inside_mask
+                side_negative_candidates = torch.zeros_like(side_dist, dtype=torch.bool)
+
+            accepted_points = candidates[accept_mask]
+            accepted_side_negative = side_negative_candidates[accept_mask]
+            if accepted_points.shape[0] > 0:
+                take_n = min(n_missing, accepted_points.shape[0])
+                collected.append(accepted_points[:take_n])
+                collected_side_negative.append(accepted_side_negative[:take_n])
                 num_collected += take_n
 
         pts = torch.cat(collected, dim=0)
@@ -185,9 +436,164 @@ def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}):
             samples_per_side=samples_per_side,
             return_numpy=False,
         )
+        if not torch.is_tensor(target):
+            target = torch.as_tensor(target, device=device, dtype=pts.dtype)
+        else:
+            target = target.to(device=device, dtype=pts.dtype)
+        if target.ndim == 1:
+            target = target.unsqueeze(1)
+        if epsilon > 0.0:
+            side_negative_mask = torch.cat(collected_side_negative, dim=0)
+            if torch.any(side_negative_mask):
+                target = torch.where(side_negative_mask, -target, target)
         return pts, target
     else:
         raise NotImplementedError(f"Data generation for fun_num={fun_num} not implemented in this snippet.")
+
+
+def visualize_epsilon_side_signs(
+    batch_size=4000,
+    fun_num=1,
+    epsilon=0.0,
+    *,
+    device=None,
+    data_gen_params={},
+    side_indices=None,
+    point_size=7,
+    alpha=0.8,
+    show=True,
+):
+    """
+    Visualize per-side sign labels returned by generate_data with epsilon band sampling.
+
+    Colors per subplot (one subplot per side):
+    - blue: positive side label
+    - red: negative side label
+    - gold ring: sign mismatch vs expected epsilon rule
+
+    Returns:
+        (fig, axes, summary)
+    """
+    if epsilon < 0.0:
+        raise ValueError("epsilon must be >= 0")
+
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    pts, target = generate_data(
+        batch_size=int(batch_size),
+        fun_num=fun_num,
+        device=device,
+        data_gen_params=data_gen_params,
+        epsilon=epsilon,
+    )
+
+    if not torch.is_tensor(target):
+        target = torch.as_tensor(target, device=device, dtype=pts.dtype)
+    else:
+        target = target.to(device=device, dtype=pts.dtype)
+    if target.ndim == 1:
+        target = target.unsqueeze(1)
+
+    side_signed, inside_mask = _compute_signed_side_distances(
+        pts, fun_num=fun_num, data_gen_params=data_gen_params
+    )
+    side_dist = torch.abs(side_signed)
+
+    if not torch.is_tensor(inside_mask):
+        inside_mask = torch.as_tensor(inside_mask, device=device, dtype=torch.bool)
+    else:
+        inside_mask = inside_mask.to(device=device, dtype=torch.bool)
+
+    pred_negative = target < 0.0
+    expected_negative = (side_signed < 0.0) & (side_dist <= epsilon)
+    mismatch = pred_negative ^ expected_negative
+
+    n_sides_out = int(target.shape[1])
+    if side_indices is None:
+        side_indices = list(range(n_sides_out))
+    else:
+        side_indices = [int(i) for i in side_indices if 0 <= int(i) < n_sides_out]
+        if len(side_indices) == 0:
+            raise ValueError("side_indices does not contain any valid side index")
+
+    n_plots = len(side_indices)
+    n_cols = min(3, n_plots)
+    n_rows = int(np.ceil(n_plots / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.0 * n_cols, 4.5 * n_rows), squeeze=False)
+
+    pts_np = pts.detach().cpu().numpy()
+    for k, side_idx in enumerate(side_indices):
+        r = k // n_cols
+        c = k % n_cols
+        ax = axes[r][c]
+
+        neg_i = pred_negative[:, side_idx].detach().cpu().numpy()
+        mismatch_i = mismatch[:, side_idx].detach().cpu().numpy()
+
+        ax.scatter(
+            pts_np[~neg_i, 0],
+            pts_np[~neg_i, 1],
+            s=point_size,
+            c='tab:blue',
+            alpha=alpha,
+            label='positive',
+        )
+        ax.scatter(
+            pts_np[neg_i, 0],
+            pts_np[neg_i, 1],
+            s=point_size,
+            c='tab:red',
+            alpha=alpha,
+            label='negative',
+        )
+        if np.any(mismatch_i):
+            ax.scatter(
+                pts_np[mismatch_i, 0],
+                pts_np[mismatch_i, 1],
+                s=point_size * 6,
+                facecolors='none',
+                edgecolors='gold',
+                linewidths=1.2,
+                label='rule mismatch',
+            )
+
+        ax.set_title(f"Side {side_idx}")
+        ax.set_xlabel('x')
+        ax.set_ylabel('y')
+        ax.set_aspect('equal', adjustable='box')
+        ax.grid(alpha=0.25)
+
+    for k in range(n_plots, n_rows * n_cols):
+        r = k // n_cols
+        c = k % n_cols
+        axes[r][c].axis('off')
+
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    if len(handles) > 0:
+        fig.legend(handles, labels, loc='upper right')
+
+    outside_ratio = float((~inside_mask).float().mean().item())
+    mismatch_ratio = float(mismatch.float().mean().item())
+    summary = {
+        'batch_size': int(batch_size),
+        'fun_num': int(fun_num),
+        'epsilon': float(epsilon),
+        'n_sides_out': n_sides_out,
+        'outside_ratio': outside_ratio,
+        'mismatch_ratio': mismatch_ratio,
+    }
+
+    fig.suptitle(
+        f"Per-side sign visualization | fun={fun_num}, epsilon={epsilon:.4f}, outside_ratio={outside_ratio:.3f}, mismatch={mismatch_ratio:.3e}",
+        y=1.02,
+    )
+    fig.tight_layout()
+
+    if show:
+        plt.show()
+
+    return fig, axes, summary
 
 
 def generate_domain_boundary_points(num_points, fun_num=1, device=None, data_gen_params={}, return_side_indices=False):
@@ -282,6 +688,7 @@ def train_model_simple(model, num_epochs=100, batch_size=10000, fun_num=1, *, de
                        eikon_coeff=0.0,
                        hotspot_coeff=0.0,
                        pred_coeff=1.0,
+                       epsilon=0.0,
                        hotspot_params={}):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -295,7 +702,7 @@ def train_model_simple(model, num_epochs=100, batch_size=10000, fun_num=1, *, de
 
     for epoch in range(num_epochs):
         pts, target = generate_data(
-            batch_size, fun_num=fun_num, device=device, data_gen_params=data_gen_params
+            batch_size, fun_num=fun_num, device=device, data_gen_params=data_gen_params, epsilon=epsilon
         )
 
         pred = model(pts)
@@ -994,7 +1401,9 @@ def plot_nn_prediction_error(model, fun_num=1, resolution=200, extent=(-1.0, 1.0
 
 def plot_local_per_side_gradient_error(model, resolution=200, extent=(-1.0, 1.0, -1.0, 1.0), *, device=None,
                                        fun_num=1, data_gen_params={}, levels=64, cmap='hot',
-                                       mask_outside_domain=True, show=True):
+                                       mask_outside_domain=True, show=True,
+                                       robust_percentile=99.0,
+                                       per_side_scaling=False):
     """
     Plot local distribution of per-side gradient-norm error maps.
 
@@ -1097,13 +1506,36 @@ def plot_local_per_side_gradient_error(model, resolution=200, extent=(-1.0, 1.0,
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.2 * n_cols, 3.8 * n_rows), squeeze=False)
     axes_flat = axes.ravel()
 
-    vmax = float(np.max(grad_norm_error_np)) if grad_norm_error_np.size else 1.0
+    valid_vals = grad_norm_error_np[domain_mask] if grad_norm_error_np.size else np.array([], dtype=np.float64)
+    valid_vals = np.asarray(valid_vals, dtype=np.float64).reshape(-1)
+    valid_vals = valid_vals[np.isfinite(valid_vals)]
+
+    if valid_vals.size > 0:
+        global_vmax = float(np.percentile(valid_vals, robust_percentile))
+    else:
+        global_vmax = 1.0
+    global_vmax = max(global_vmax, 1e-10)
+
+    n_levels = max(2, int(levels))
 
     for i in range(n_fields):
         ax = axes_flat[i]
         z = grad_norm_error_np[:, :, i]
         z_masked = np.ma.array(z, mask=~domain_mask)
-        cf = ax.contourf(X_np, Y_np, z_masked, levels=levels, cmap=cmap, vmin=0.0, vmax=vmax)
+        if per_side_scaling:
+            z_vals = z_masked.compressed()
+            z_vals = z_vals[np.isfinite(z_vals)]
+            if z_vals.size > 0:
+                vmax_i = float(np.percentile(z_vals, robust_percentile))
+            else:
+                vmax_i = global_vmax
+            vmax_i = max(vmax_i, 1e-10)
+        else:
+            vmax_i = global_vmax
+
+        level_vals = np.linspace(0.0, vmax_i, n_levels)
+        z_plot = np.ma.clip(z_masked, 0.0, vmax_i)
+        cf = ax.contourf(X_np, Y_np, z_plot, levels=level_vals, cmap=cmap)
         ax.set_title(f'Grad-norm error side {i}')
         ax.set_aspect('equal', adjustable='box')
         ax.set_xlabel('x')
@@ -1123,7 +1555,9 @@ def plot_local_per_side_gradient_error(model, resolution=200, extent=(-1.0, 1.0,
 def plot_local_per_side_second_derivative(model, resolution=200, extent=(-1.0, 1.0, -1.0, 1.0), *, device=None,
                                           fun_num=1, data_gen_params={}, levels=64, cmap='coolwarm',
                                           component='laplacian', absolute=False,
-                                          mask_outside_domain=True, show=True):
+                                          mask_outside_domain=True, show=True,
+                                          robust_percentile=99.0,
+                                          per_side_scaling=False):
     """
     Plot local distribution of per-side second derivatives.
 
@@ -1265,16 +1699,45 @@ def plot_local_per_side_second_derivative(model, resolution=200, extent=(-1.0, 1
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.2 * n_cols, 3.8 * n_rows), squeeze=False)
     axes_flat = axes.ravel()
 
-    vmax = float(np.max(np.abs(second_derivative_np))) if second_derivative_np.size else 1.0
+    valid_vals = second_derivative_np[domain_mask] if second_derivative_np.size else np.array([], dtype=np.float64)
+    valid_vals = np.asarray(valid_vals, dtype=np.float64).reshape(-1)
+    valid_vals = valid_vals[np.isfinite(valid_vals)]
+
+    if valid_vals.size > 0:
+        if absolute:
+            global_vmax = float(np.percentile(np.abs(valid_vals), robust_percentile))
+        else:
+            global_vmax = float(np.percentile(np.abs(valid_vals), robust_percentile))
+    else:
+        global_vmax = 1.0
+    global_vmax = max(global_vmax, 1e-10)
+
+    n_levels = max(2, int(levels))
 
     for i in range(n_fields):
         ax = axes_flat[i]
         z = second_derivative_np[:, :, i]
         z_masked = np.ma.array(z, mask=~domain_mask)
-        if absolute:
-            cf = ax.contourf(X_np, Y_np, z_masked, levels=levels, cmap='hot', vmin=0.0, vmax=vmax)
+
+        if per_side_scaling:
+            z_vals = z_masked.compressed()
+            z_vals = z_vals[np.isfinite(z_vals)]
+            if z_vals.size > 0:
+                vmax_i = float(np.percentile(np.abs(z_vals), robust_percentile))
+            else:
+                vmax_i = global_vmax
+            vmax_i = max(vmax_i, 1e-10)
         else:
-            cf = ax.contourf(X_np, Y_np, z_masked, levels=levels, cmap=cmap, vmin=-vmax, vmax=vmax)
+            vmax_i = global_vmax
+
+        if absolute:
+            level_vals = np.linspace(0.0, vmax_i, n_levels)
+            z_plot = np.ma.clip(z_masked, 0.0, vmax_i)
+            cf = ax.contourf(X_np, Y_np, z_plot, levels=level_vals, cmap='hot')
+        else:
+            level_vals = np.linspace(-vmax_i, vmax_i, n_levels)
+            z_plot = np.ma.clip(z_masked, -vmax_i, vmax_i)
+            cf = ax.contourf(X_np, Y_np, z_plot, levels=level_vals, cmap=cmap)
         ax.set_title(f'Second derivative side {i} ({component})')
         ax.set_aspect('equal', adjustable='box')
         ax.set_xlabel('x')

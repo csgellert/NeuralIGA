@@ -4,6 +4,7 @@ import torch
 
 
 _CURVED_PENTAGON_CACHE = {}
+_MIXED_PENTAGON_CACHE = {}
 
 def _as_torch_tensor(value, *, device, dtype):
 	if torch.is_tensor(value):
@@ -18,6 +19,17 @@ def _curved_pentagon_cache_key(radius, center, rotation, bulge, samples_per_side
 		float(rotation),
 		float(bulge),
 		int(samples_per_side),
+	)
+
+
+def _mixed_pentagon_cache_key(radius, center, rotation, bulge, samples_per_side, curved_side_indices):
+	return (
+		float(radius),
+		(float(center[0]), float(center[1])),
+		float(rotation),
+		float(bulge),
+		int(samples_per_side),
+		tuple(int(i) for i in curved_side_indices),
 	)
 
 
@@ -102,6 +114,84 @@ def _build_curved_pentagon_bspline_cache(
 	return cache
 
 
+def _build_mixed_pentagon_bspline_cache(
+	radius=1.0,
+	center=(0.0, 0.0),
+	rotation=0.0,
+	bulge=0.18,
+	samples_per_side=128,
+	curved_side_indices=(0, 2, 4),
+):
+	"""
+	Build and cache a mixed pentagon boundary with 3 curved and 2 straight sides.
+
+	Curved sides use one cubic Bezier span per side, while straight sides are
+	kept as line segments sampled into polylines.
+	"""
+	if samples_per_side < 8:
+		raise ValueError("samples_per_side must be >= 8")
+	if radius <= 0.0:
+		raise ValueError("radius must be positive")
+
+	curved_side_indices = tuple(sorted(set(int(i) for i in curved_side_indices)))
+	if len(curved_side_indices) != 3:
+		raise ValueError("curved_side_indices must contain exactly 3 unique side indices")
+	if any((i < 0 or i >= 5) for i in curved_side_indices):
+		raise ValueError("curved_side_indices entries must be in [0, 4]")
+
+	key = _mixed_pentagon_cache_key(radius, center, rotation, bulge, samples_per_side, curved_side_indices)
+	if key in _MIXED_PENTAGON_CACHE:
+		return _MIXED_PENTAGON_CACHE[key]
+
+	cx, cy = float(center[0]), float(center[1])
+	n_sides = 5
+	angles = rotation + (2.0 * np.pi / n_sides) * np.arange(n_sides, dtype=np.float64)
+	vertices = np.column_stack((cx + radius * np.cos(angles), cy + radius * np.sin(angles)))
+
+	t_vals = np.linspace(0.0, 1.0, int(samples_per_side) + 1, dtype=np.float64)
+	curved_set = set(curved_side_indices)
+	side_polylines = []
+	for i in range(n_sides):
+		v0 = vertices[i]
+		v1 = vertices[(i + 1) % n_sides]
+		edge = v1 - v0
+		edge_len = np.linalg.norm(edge)
+		if edge_len <= 1e-14:
+			raise ValueError("Degenerate pentagon edge encountered")
+
+		if i in curved_set:
+			# Inward normal for CCW-ordered vertices.
+			n_in = np.array([-edge[1], edge[0]], dtype=np.float64) / edge_len
+			curv = float(bulge) * edge_len
+
+			p0 = v0
+			p1 = (2.0 / 3.0) * v0 + (1.0 / 3.0) * v1 + curv * n_in
+			p2 = (1.0 / 3.0) * v0 + (2.0 / 3.0) * v1 + curv * n_in
+			p3 = v1
+			side_curve = _cubic_bezier_eval(p0, p1, p2, p3, t_vals)
+		else:
+			side_curve = v0[None, :] + t_vals[:, None] * edge[None, :]
+
+		side_polylines.append(side_curve)
+
+	boundary_parts = [side_polylines[i][:-1] for i in range(n_sides)]
+	boundary_polyline = np.vstack(boundary_parts)
+	x_min = float(np.min(boundary_polyline[:, 0]))
+	x_max = float(np.max(boundary_polyline[:, 0]))
+	y_min = float(np.min(boundary_polyline[:, 1]))
+	y_max = float(np.max(boundary_polyline[:, 1]))
+
+	cache = {
+		"n_sides": n_sides,
+		"side_polylines": side_polylines,
+		"boundary_polyline": boundary_polyline,
+		"bbox": (x_min, x_max, y_min, y_max),
+		"curved_side_indices": curved_side_indices,
+	}
+	_MIXED_PENTAGON_CACHE[key] = cache
+	return cache
+
+
 def _point_to_polyline_distance_numpy(points, polyline):
 	"""Minimum distance from points (P,2) to polyline segments."""
 	start = polyline[:-1]
@@ -181,6 +271,57 @@ def is_inside_curved_pentagon_bspline(
 		rotation=rotation,
 		bulge=bulge,
 		samples_per_side=samples_per_side,
+	)
+	polygon = cache["boundary_polyline"]
+
+	if torch.is_tensor(x) or torch.is_tensor(y):
+		device = x.device if torch.is_tensor(x) else y.device
+		x_dtype = x.dtype if torch.is_tensor(x) and x.is_floating_point() else torch.float64
+		y_dtype = y.dtype if torch.is_tensor(y) and y.is_floating_point() else torch.float64
+		dtype = torch.promote_types(x_dtype, y_dtype)
+
+		x_arr = _as_torch_tensor(x, device=device, dtype=dtype)
+		y_arr = _as_torch_tensor(y, device=device, dtype=dtype)
+		if x_arr.shape != y_arr.shape:
+			raise ValueError("x and y must have the same shape")
+
+		pts = torch.stack((x_arr.reshape(-1), y_arr.reshape(-1)), dim=1)
+		poly_t = torch.as_tensor(polygon, device=device, dtype=dtype)
+		inside = _points_in_polygon_torch(pts, poly_t).reshape(x_arr.shape)
+		if return_numpy:
+			return inside.detach().cpu().numpy()
+		return inside
+
+	x_arr = np.asarray(x, dtype=np.float64)
+	y_arr = np.asarray(y, dtype=np.float64)
+	if x_arr.shape != y_arr.shape:
+		raise ValueError("x and y must have the same shape")
+	pts = np.column_stack((x_arr.reshape(-1), y_arr.reshape(-1)))
+	inside = _points_in_polygon_numpy(pts, polygon).reshape(x_arr.shape)
+	if return_numpy:
+		return inside
+	return inside.tolist()
+
+
+def is_inside_mixed_pentagon_bspline(
+	x,
+	y,
+	radius=1.0,
+	center=(0.0, 0.0),
+	rotation=0.0,
+	bulge=0.18,
+	samples_per_side=128,
+	curved_side_indices=(0, 2, 4),
+	return_numpy=False,
+):
+	"""Point-in-domain test for mixed pentagon with 3 curved and 2 straight sides."""
+	cache = _build_mixed_pentagon_bspline_cache(
+		radius=radius,
+		center=center,
+		rotation=rotation,
+		bulge=bulge,
+		samples_per_side=samples_per_side,
+		curved_side_indices=curved_side_indices,
 	)
 	polygon = cache["boundary_polyline"]
 
@@ -306,6 +447,103 @@ def curved_pentagon_bspline_side_distances(
 	return distances.tolist()
 
 
+def mixed_pentagon_bspline_side_distances(
+	x,
+	y,
+	radius=1.0,
+	center=(0.0, 0.0),
+	rotation=0.0,
+	bulge=0.18,
+	samples_per_side=128,
+	curved_side_indices=(0, 2, 4),
+	use_sign=False,
+	return_numpy=False,
+):
+	"""
+	Per-side distances to a mixed pentagon boundary with 3 curved and 2 straight sides.
+
+	Returns shape (P, 5) for P points or (5,) for scalar inputs.
+	"""
+	cache = _build_mixed_pentagon_bspline_cache(
+		radius=radius,
+		center=center,
+		rotation=rotation,
+		bulge=bulge,
+		samples_per_side=samples_per_side,
+		curved_side_indices=curved_side_indices,
+	)
+	side_polylines = cache["side_polylines"]
+
+	if torch.is_tensor(x) or torch.is_tensor(y):
+		device = x.device if torch.is_tensor(x) else y.device
+		x_dtype = x.dtype if torch.is_tensor(x) and x.is_floating_point() else torch.float64
+		y_dtype = y.dtype if torch.is_tensor(y) and y.is_floating_point() else torch.float64
+		dtype = torch.promote_types(x_dtype, y_dtype)
+
+		x_arr = _as_torch_tensor(x, device=device, dtype=dtype)
+		y_arr = _as_torch_tensor(y, device=device, dtype=dtype)
+		if x_arr.shape != y_arr.shape:
+			raise ValueError("x and y must have the same shape")
+
+		scalar_input = x_arr.ndim == 0
+		pts = torch.stack((x_arr.reshape(-1), y_arr.reshape(-1)), dim=1)
+		dists = []
+		for poly in side_polylines:
+			poly_t = torch.as_tensor(poly, device=device, dtype=dtype)
+			dists.append(_point_to_polyline_distance_torch(pts, poly_t))
+		distances = torch.stack(dists, dim=1)
+
+		if use_sign:
+			inside = is_inside_mixed_pentagon_bspline(
+				pts[:, 0],
+				pts[:, 1],
+				radius=radius,
+				center=center,
+				rotation=rotation,
+				bulge=bulge,
+				samples_per_side=samples_per_side,
+				curved_side_indices=curved_side_indices,
+			)
+			sign = torch.where(inside, torch.ones_like(pts[:, 0]), -torch.ones_like(pts[:, 0]))
+			distances = distances * sign[:, None]
+
+		if scalar_input:
+			distances = distances[0]
+		if return_numpy:
+			return distances.detach().cpu().numpy()
+		return distances
+
+	x_arr = np.asarray(x, dtype=np.float64)
+	y_arr = np.asarray(y, dtype=np.float64)
+	if x_arr.shape != y_arr.shape:
+		raise ValueError("x and y must have the same shape")
+
+	scalar_input = x_arr.ndim == 0
+	pts = np.column_stack((x_arr.reshape(-1), y_arr.reshape(-1)))
+	distances = np.column_stack([_point_to_polyline_distance_numpy(pts, poly) for poly in side_polylines])
+
+	if use_sign:
+		inside = is_inside_mixed_pentagon_bspline(
+			pts[:, 0],
+			pts[:, 1],
+			radius=radius,
+			center=center,
+			rotation=rotation,
+			bulge=bulge,
+			samples_per_side=samples_per_side,
+			curved_side_indices=curved_side_indices,
+			return_numpy=True,
+		)
+		sign = np.where(inside, 1.0, -1.0)
+		distances = distances * sign[:, None]
+
+	if scalar_input:
+		distances = distances[0]
+	if return_numpy:
+		return distances
+	return distances.tolist()
+
+
 def generate_curved_pentagon_bspline_boundary_points(
 	num_points,
 	radius=1.0,
@@ -323,6 +561,54 @@ def generate_curved_pentagon_bspline_boundary_points(
 		rotation=rotation,
 		bulge=bulge,
 		samples_per_side=samples_per_side,
+	)
+	side_polylines = cache["side_polylines"]
+	n_sides = 5
+
+	if device is None:
+		device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+	side_idx = torch.randint(0, n_sides, (int(num_points),), device=device)
+	t = torch.rand(int(num_points), device=device)
+	pts = torch.empty(int(num_points), 2, device=device, dtype=torch.float32)
+
+	for i in range(n_sides):
+		mask = side_idx == i
+		if not torch.any(mask):
+			continue
+		poly = torch.as_tensor(side_polylines[i], device=device, dtype=torch.float32)
+		n_seg = poly.shape[0] - 1
+		local_t = t[mask] * n_seg
+		seg_idx = torch.clamp(torch.floor(local_t).long(), max=n_seg - 1)
+		alpha = (local_t - seg_idx.to(local_t.dtype)).unsqueeze(1)
+		p0 = poly[seg_idx]
+		p1 = poly[seg_idx + 1]
+		pts[mask] = (1.0 - alpha) * p0 + alpha * p1
+
+	if return_side_indices:
+		return pts, side_idx
+	return pts
+
+
+def generate_mixed_pentagon_bspline_boundary_points(
+	num_points,
+	radius=1.0,
+	center=(0.0, 0.0),
+	rotation=0.0,
+	bulge=0.18,
+	samples_per_side=128,
+	curved_side_indices=(0, 2, 4),
+	device=None,
+	return_side_indices=False,
+):
+	"""Sample points along mixed pentagon boundary, optionally returning side index."""
+	cache = _build_mixed_pentagon_bspline_cache(
+		radius=radius,
+		center=center,
+		rotation=rotation,
+		bulge=bulge,
+		samples_per_side=samples_per_side,
+		curved_side_indices=curved_side_indices,
 	)
 	side_polylines = cache["side_polylines"]
 	n_sides = 5

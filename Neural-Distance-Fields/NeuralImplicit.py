@@ -217,6 +217,64 @@ def _compute_signed_side_distances(pts, fun_num=1, data_gen_params={}):
             inside_mask = inside_mask.to(device=device, dtype=torch.bool)
         return side_signed, inside_mask
 
+    if fun_num == 4:
+        radius = data_gen_params.get('radius', 0.5)
+        center = data_gen_params.get('center', (0.0, 0.0))
+        rotation = data_gen_params.get('rotation', 0.0)
+        bulge = data_gen_params.get('bulge', 0.18)
+        samples_per_side = data_gen_params.get('samples_per_side', 128)
+        curved_side_indices = data_gen_params.get('curved_side_indices', (0, 2, 4))
+
+        d_unsigned = SDF.mixed_pentagon_bspline_side_distances(
+            pts[:, 0],
+            pts[:, 1],
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+            curved_side_indices=curved_side_indices,
+            return_numpy=False,
+        )
+        if not torch.is_tensor(d_unsigned):
+            d_unsigned = torch.as_tensor(d_unsigned, device=device, dtype=dtype)
+        else:
+            d_unsigned = d_unsigned.to(device=device, dtype=dtype)
+
+        cache = SDF._build_mixed_pentagon_bspline_cache(
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+            curved_side_indices=curved_side_indices,
+        )
+        side_polylines = cache['side_polylines']
+
+        signed_list = []
+        for i, poly in enumerate(side_polylines):
+            s_i = _curved_side_signed_distance(pts, poly, device, dtype)
+            signed_list.append(
+                d_unsigned[:, i] * torch.where(s_i >= 0.0, torch.ones_like(s_i), -torch.ones_like(s_i))
+            )
+        side_signed = torch.stack(signed_list, dim=1)
+
+        inside_mask = SDF.is_inside_mixed_pentagon_bspline(
+            pts[:, 0],
+            pts[:, 1],
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+            curved_side_indices=curved_side_indices,
+        )
+        if not torch.is_tensor(inside_mask):
+            inside_mask = torch.as_tensor(inside_mask, device=device, dtype=torch.bool)
+        else:
+            inside_mask = inside_mask.to(device=device, dtype=torch.bool)
+        return side_signed, inside_mask
+
     raise NotImplementedError(f"Signed side distances for fun_num={fun_num} are not implemented")
 
 def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}, epsilon=0.0):
@@ -434,6 +492,97 @@ def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}, epsilo
             rotation=rotation,
             bulge=bulge,
             samples_per_side=samples_per_side,
+            return_numpy=False,
+        )
+        if not torch.is_tensor(target):
+            target = torch.as_tensor(target, device=device, dtype=pts.dtype)
+        else:
+            target = target.to(device=device, dtype=pts.dtype)
+        if target.ndim == 1:
+            target = target.unsqueeze(1)
+        if epsilon > 0.0:
+            side_negative_mask = torch.cat(collected_side_negative, dim=0)
+            if torch.any(side_negative_mask):
+                target = torch.where(side_negative_mask, -target, target)
+        return pts, target
+    elif fun_num == 4:  # Mixed pentagon: 3 curved sides + 2 straight sides
+        radius = data_gen_params.get('radius', 0.5)
+        center = data_gen_params.get('center', (0.0, 0.0))
+        rotation = data_gen_params.get('rotation', 0.0)
+        bulge = data_gen_params.get('bulge', 0.18)
+        samples_per_side = data_gen_params.get('samples_per_side', 128)
+        curved_side_indices = data_gen_params.get('curved_side_indices', (0, 2, 4))
+
+        cache = SDF._build_mixed_pentagon_bspline_cache(
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+            curved_side_indices=curved_side_indices,
+        )
+        x_min, x_max, y_min, y_max = cache['bbox']
+        pad = 0.05 * radius + epsilon
+        x_min -= pad
+        x_max += pad
+        y_min -= pad
+        y_max += pad
+
+        collected = []
+        collected_side_negative = []
+        num_collected = 0
+        while num_collected < batch_size:
+            n_missing = batch_size - num_collected
+            n_candidates = max(2048, n_missing * 3)
+            candidates = torch.empty(n_candidates, 2, device=device)
+            candidates[:, 0] = x_min + (x_max - x_min) * torch.rand(n_candidates, device=device)
+            candidates[:, 1] = y_min + (y_max - y_min) * torch.rand(n_candidates, device=device)
+
+            inside_mask = SDF.is_inside_mixed_pentagon_bspline(
+                candidates[:, 0],
+                candidates[:, 1],
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                bulge=bulge,
+                samples_per_side=samples_per_side,
+                curved_side_indices=curved_side_indices,
+            )
+            if not torch.is_tensor(inside_mask):
+                inside_mask = torch.as_tensor(inside_mask, device=device, dtype=torch.bool)
+
+            side_signed, _ = _compute_signed_side_distances(
+                candidates, fun_num=fun_num, data_gen_params=data_gen_params
+            )
+            side_dist = torch.abs(side_signed)
+            boundary_dist = torch.min(side_dist, dim=1).values
+
+            if epsilon > 0.0:
+                outside_near_mask = (~inside_mask) & (boundary_dist <= epsilon)
+                accept_mask = inside_mask | outside_near_mask
+                side_negative_candidates = (side_signed < 0.0) & (side_dist <= epsilon)
+            else:
+                accept_mask = inside_mask
+                side_negative_candidates = torch.zeros_like(side_dist, dtype=torch.bool)
+
+            accepted_points = candidates[accept_mask]
+            accepted_side_negative = side_negative_candidates[accept_mask]
+            if accepted_points.shape[0] > 0:
+                take_n = min(n_missing, accepted_points.shape[0])
+                collected.append(accepted_points[:take_n])
+                collected_side_negative.append(accepted_side_negative[:take_n])
+                num_collected += take_n
+
+        pts = torch.cat(collected, dim=0)
+        target = SDF.mixed_pentagon_bspline_side_distances(
+            pts[:, 0],
+            pts[:, 1],
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+            curved_side_indices=curved_side_indices,
             return_numpy=False,
         )
         if not torch.is_tensor(target):
@@ -679,6 +828,26 @@ def generate_domain_boundary_points(num_points, fun_num=1, device=None, data_gen
         )
         return bnd
 
+    if fun_num == 4:
+        radius = data_gen_params.get('radius', 0.5)
+        center = data_gen_params.get('center', (0.0, 0.0))
+        rotation = data_gen_params.get('rotation', 0.0)
+        bulge = data_gen_params.get('bulge', 0.18)
+        samples_per_side = data_gen_params.get('samples_per_side', 128)
+        curved_side_indices = data_gen_params.get('curved_side_indices', (0, 2, 4))
+        bnd = SDF.generate_mixed_pentagon_bspline_boundary_points(
+            num_points,
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+            curved_side_indices=curved_side_indices,
+            device=device,
+            return_side_indices=return_side_indices,
+        )
+        return bnd
+
     raise NotImplementedError(f"Boundary point generation for fun_num={fun_num} is not implemented")
 
 
@@ -835,6 +1004,28 @@ def _evaluate_ground_truth_on_points(pts, fun_num=1, data_gen_params={}):
             rotation=rotation,
             bulge=bulge,
             samples_per_side=samples_per_side,
+            return_numpy=True,
+        )
+        gt = torch.as_tensor(gt_np, device=pts.device, dtype=pts.dtype)
+        if gt.ndim == 1:
+            gt = gt.unsqueeze(1)
+        return gt
+    if fun_num == 4:
+        radius = data_gen_params.get('radius', 0.5)
+        center = data_gen_params.get('center', (0.0, 0.0))
+        rotation = data_gen_params.get('rotation', 0.0)
+        bulge = data_gen_params.get('bulge', 0.18)
+        samples_per_side = data_gen_params.get('samples_per_side', 128)
+        curved_side_indices = data_gen_params.get('curved_side_indices', (0, 2, 4))
+        gt_np = SDF.mixed_pentagon_bspline_side_distances(
+            pts[:, 0].detach().cpu().numpy(),
+            pts[:, 1].detach().cpu().numpy(),
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            bulge=bulge,
+            samples_per_side=samples_per_side,
+            curved_side_indices=curved_side_indices,
             return_numpy=True,
         )
         gt = torch.as_tensor(gt_np, device=pts.device, dtype=pts.dtype)
@@ -1130,6 +1321,25 @@ def plot_nn_distance_fields(model, resolution=200, extent=(-1.0, 1.0, -1.0, 1.0)
                 return_numpy=True,
             )
             domain_mask = np.asarray(inside, dtype=bool).reshape(render_resolution, render_resolution)
+        elif fun_num == 4:
+            radius = data_gen_params.get('radius', 0.5)
+            center = data_gen_params.get('center', (0.0, 0.0))
+            rotation = data_gen_params.get('rotation', 0.0)
+            bulge = data_gen_params.get('bulge', 0.18)
+            samples_per_side = data_gen_params.get('samples_per_side', 128)
+            curved_side_indices = data_gen_params.get('curved_side_indices', (0, 2, 4))
+            inside = SDF.is_inside_mixed_pentagon_bspline(
+                grid_points[:, 0].detach().cpu().numpy(),
+                grid_points[:, 1].detach().cpu().numpy(),
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                bulge=bulge,
+                samples_per_side=samples_per_side,
+                curved_side_indices=curved_side_indices,
+                return_numpy=True,
+            )
+            domain_mask = np.asarray(inside, dtype=bool).reshape(render_resolution, render_resolution)
         else:
             raise NotImplementedError(f"Domain masking for fun_num={fun_num} is not implemented")
     else:
@@ -1239,6 +1449,25 @@ def plot_ground_truth_distance_fields(resolution=200, extent=(-1.0, 1.0, -1.0, 1
                 rotation=rotation,
                 bulge=bulge,
                 samples_per_side=samples_per_side,
+                return_numpy=True,
+            )
+            domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
+        elif fun_num == 4:
+            radius = data_gen_params.get('radius', 0.5)
+            center = data_gen_params.get('center', (0.0, 0.0))
+            rotation = data_gen_params.get('rotation', 0.0)
+            bulge = data_gen_params.get('bulge', 0.18)
+            samples_per_side = data_gen_params.get('samples_per_side', 128)
+            curved_side_indices = data_gen_params.get('curved_side_indices', (0, 2, 4))
+            inside = SDF.is_inside_mixed_pentagon_bspline(
+                grid_points[:, 0].detach().cpu().numpy(),
+                grid_points[:, 1].detach().cpu().numpy(),
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                bulge=bulge,
+                samples_per_side=samples_per_side,
+                curved_side_indices=curved_side_indices,
                 return_numpy=True,
             )
             domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
@@ -1364,6 +1593,25 @@ def plot_nn_prediction_error(model, fun_num=1, resolution=200, extent=(-1.0, 1.0
                 rotation=rotation,
                 bulge=bulge,
                 samples_per_side=samples_per_side,
+                return_numpy=True,
+            )
+            domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
+        elif fun_num == 4:
+            radius = data_gen_params.get('radius', 0.5)
+            center = data_gen_params.get('center', (0.0, 0.0))
+            rotation = data_gen_params.get('rotation', 0.0)
+            bulge = data_gen_params.get('bulge', 0.18)
+            samples_per_side = data_gen_params.get('samples_per_side', 128)
+            curved_side_indices = data_gen_params.get('curved_side_indices', (0, 2, 4))
+            inside = SDF.is_inside_mixed_pentagon_bspline(
+                grid_points[:, 0].detach().cpu().numpy(),
+                grid_points[:, 1].detach().cpu().numpy(),
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                bulge=bulge,
+                samples_per_side=samples_per_side,
+                curved_side_indices=curved_side_indices,
                 return_numpy=True,
             )
             domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
@@ -1493,6 +1741,25 @@ def plot_local_per_side_gradient_error(model, resolution=200, extent=(-1.0, 1.0,
                 rotation=rotation,
                 bulge=bulge,
                 samples_per_side=samples_per_side,
+                return_numpy=True,
+            )
+            domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
+        elif fun_num == 4:
+            radius = data_gen_params.get('radius', 0.5)
+            center = data_gen_params.get('center', (0.0, 0.0))
+            rotation = data_gen_params.get('rotation', 0.0)
+            bulge = data_gen_params.get('bulge', 0.18)
+            samples_per_side = data_gen_params.get('samples_per_side', 128)
+            curved_side_indices = data_gen_params.get('curved_side_indices', (0, 2, 4))
+            inside = SDF.is_inside_mixed_pentagon_bspline(
+                grid_points[:, 0].detach().cpu().numpy(),
+                grid_points[:, 1].detach().cpu().numpy(),
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                bulge=bulge,
+                samples_per_side=samples_per_side,
+                curved_side_indices=curved_side_indices,
                 return_numpy=True,
             )
             domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
@@ -1686,6 +1953,25 @@ def plot_local_per_side_second_derivative(model, resolution=200, extent=(-1.0, 1
                 rotation=rotation,
                 bulge=bulge,
                 samples_per_side=samples_per_side,
+                return_numpy=True,
+            )
+            domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)
+        elif fun_num == 4:
+            radius = data_gen_params.get('radius', 0.5)
+            center = data_gen_params.get('center', (0.0, 0.0))
+            rotation = data_gen_params.get('rotation', 0.0)
+            bulge = data_gen_params.get('bulge', 0.18)
+            samples_per_side = data_gen_params.get('samples_per_side', 128)
+            curved_side_indices = data_gen_params.get('curved_side_indices', (0, 2, 4))
+            inside = SDF.is_inside_mixed_pentagon_bspline(
+                grid_points[:, 0].detach().cpu().numpy(),
+                grid_points[:, 1].detach().cpu().numpy(),
+                radius=radius,
+                center=center,
+                rotation=rotation,
+                bulge=bulge,
+                samples_per_side=samples_per_side,
+                curved_side_indices=curved_side_indices,
                 return_numpy=True,
             )
             domain_mask = np.asarray(inside, dtype=bool).reshape(resolution, resolution)

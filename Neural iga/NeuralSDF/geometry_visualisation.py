@@ -282,3 +282,84 @@ def plot_laplacian_of_bspline_sdf(model = None, control_points=None, degree=1, n
     plt.contourf(X, Y, Z_abs, levels=50, cmap='RdBu_r')
     plt.colorbar()
     plt.show()
+
+
+def plot_local_prediction_gradient_error(model, N=200, extent=(-1.1, 1.1, -1.1, 1.1),
+                                         use_log=False, levels=50, cmap='plasma',
+                                         chunk_size=50000, device=None):
+    """
+    Plot the local distribution of prediction gradient error with Eikonal target ||grad(phi)||=1.
+
+    The plotted quantity is abs(||grad(phi)|| - 1) over a 2D grid.
+
+    Args:
+        model: neural implicit model with callable interface
+        N: int - resolution per axis
+        extent: tuple - (xmin, xmax, ymin, ymax) plotting extent
+        use_log: bool - if True, show the error in logarithmic scale
+        levels: int - number of contour levels
+        cmap: str - matplotlib colormap
+        chunk_size: int - process grid points in chunks for memory safety
+        device: torch device
+
+    Returns:
+        X, Y, Z: meshgrid arrays and the local error field
+
+    Example:
+        plot_local_prediction_gradient_error(model, N=300, use_log=True)
+    """
+    from matplotlib import colors
+
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    model = model.to(device)
+
+    model_dtype = torch.float32
+    try:
+        first_param = next(model.parameters())
+        model_dtype = first_param.dtype
+    except StopIteration:
+        pass
+
+    x_vals = np.linspace(extent[0], extent[1], N)
+    y_vals = np.linspace(extent[2], extent[3], N)
+    X, Y = np.meshgrid(x_vals, y_vals)
+
+    pts_np = np.stack([X.ravel(), Y.ravel()], axis=1)
+    pts = torch.from_numpy(pts_np).to(device=device, dtype=model_dtype)
+
+    grad_norm_error = torch.empty(pts.shape[0], device=device, dtype=model_dtype)
+
+    for i in range(0, pts.shape[0], chunk_size):
+        j = min(i + chunk_size, pts.shape[0])
+        pts_chunk = pts[i:j].clone().detach().requires_grad_(True)
+        pred = model(pts_chunk).squeeze(-1)
+        grads = torch.autograd.grad(outputs=pred,
+                                    inputs=pts_chunk,
+                                    grad_outputs=torch.ones_like(pred),
+                                    create_graph=False,
+                                    retain_graph=False,
+                                    only_inputs=True)[0]
+        grad_norm = torch.linalg.norm(grads, dim=1)
+        grad_norm_error[i:j] = torch.abs(grad_norm - 1.0)
+
+    Z = grad_norm_error.detach().cpu().numpy().reshape(N, N)
+
+    plt.figure(figsize=(8, 8))
+    if use_log:
+        eps = 1e-12
+        plt.contourf(X, Y, np.maximum(Z, eps), levels=levels, cmap=cmap,
+                     norm=colors.LogNorm(vmin=eps, vmax=max(float(np.max(Z)), eps)))
+        plt.colorbar(label='| ||grad(phi)|| - 1 | (log scale)')
+    else:
+        plt.contourf(X, Y, Z, levels=levels, cmap=cmap)
+        plt.colorbar(label='| ||grad(phi)|| - 1 |')
+
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.title('Local Gradient-Norm Error (Eikonal Target)')
+    plt.gca().set_aspect('equal', adjustable='box')
+    plt.show()
+
+    return X, Y, Z

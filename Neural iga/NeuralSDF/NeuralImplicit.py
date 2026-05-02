@@ -17,7 +17,7 @@ def generate_data(num_samples, fun_num=0, device=None, data_gen_params={}):
     
     Args:
         num_samples: number of data points to generate
-        fun_num: function type (0=circle, 1=star, 4=L-shape, 5=line)
+        fun_num: function type (0=circle, 1=star, 2=pentagon, 4=L-shape, 5=line)
         device: torch device for computation (CPU/CUDA)
         data_gen_params: dict with additional parameters (e.g., 'angle', 'offset' for line)
     """
@@ -38,6 +38,13 @@ def generate_data(num_samples, fun_num=0, device=None, data_gen_params={}):
         # Calculate distances for each point using vectorized function
         distances = SDF.distance_from_star_contour_vectorized(coordinates, device=device)
         
+        return coordinates, distances.view(-1, 1)
+    elif fun_num == 2: # pentagon
+        margain = data_gen_params.get('margain', 0.0)
+        radius = data_gen_params.get('radius', 1.0)
+        rotation = data_gen_params.get('rotation', 0.0)
+        coordinates = (2+2*margain) * torch.rand(num_samples, 2, device=device) - 1 - margain
+        distances = SDF.distance_from_pentagon_vectorized(coordinates, radius=radius, rotation=rotation, device=device)
         return coordinates, distances.view(-1, 1)
     elif fun_num == 4: # L-shape
         margain = data_gen_params.get('margain', 0.0)
@@ -62,7 +69,7 @@ def generate_standard_boundary_points(num_boundary_points, fun_num=0, device=Non
     
     Args:
         num_boundary_points: int - number of boundary points to generate
-        fun_num: function type (0=circle, 1=star, 4=L-shape, 5=line)
+        fun_num: function type (0=circle, 1=star, 2=pentagon, 4=L-shape, 5=line)
         device: torch device for computation
         data_gen_params: dict with additional parameters
         use_importance_sampling: if True, add Gaussian noise to boundary points and return SDF values
@@ -120,6 +127,32 @@ def generate_standard_boundary_points(num_boundary_points, fun_num=0, device=Non
             return boundary_points, sdf_val.view(-1, 1)
         return boundary_points
     
+    elif fun_num == 2:  # pentagon
+        radius = data_gen_params.get('radius', 1.0)
+        rotation = data_gen_params.get('rotation', 0.0)
+        
+        # Generate points on pentagon contour
+        pentagon_vertices = SDF.calculate_pentagon_vertices(radius=radius, rotation=rotation, device=device)
+        num_vertices = pentagon_vertices.shape[0]
+        
+        # Randomly select edges and positions on those edges
+        edge_indices = torch.randint(0, num_vertices, (num_boundary_points,), device=device)
+        t = torch.rand(num_boundary_points, device=device)
+        
+        start_points = pentagon_vertices[edge_indices]
+        end_points = pentagon_vertices[(edge_indices + 1) % num_vertices]
+        
+        # Interpolate along edges
+        boundary_points = start_points + t.unsqueeze(1) * (end_points - start_points)
+        
+        if use_importance_sampling:
+            noise = torch.randn_like(boundary_points, device=device) * sigma
+            boundary_points += noise
+            boundary_points = torch.clamp(boundary_points, -1.1, 1.1)
+            sdf_val = SDF.distance_from_pentagon_vectorized(boundary_points, radius=radius, rotation=rotation, device=device)
+            return boundary_points, sdf_val.view(-1, 1)
+        return boundary_points
+    
     elif fun_num == 4:  # L-shape
         # L-shape corners
         corners = torch.tensor([(-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0), (1.0, 0.0), (0.0, 0.0), (0.0, 1.0)], device=device)
@@ -168,7 +201,7 @@ def get_standard_SDF_gradient(points, fun_num=0, device=None, data_gen_params={}
     
     Args:
         points: tensor of shape (N, 2) - input points
-        fun_num: function type (0=circle, 1=star, 4=L-shape, 5=line)
+        fun_num: function type (0=circle, 1=star, 2=pentagon, 4=L-shape, 5=line)
         device: torch device for computation
         data_gen_params: dict with additional parameters
     """
@@ -183,6 +216,11 @@ def get_standard_SDF_gradient(points, fun_num=0, device=None, data_gen_params={}
     elif fun_num == 1:  # star shape
         raise NotImplementedError("SDF gradient not implemented for star shape")
         sdf_values = SDF.distance_from_star_contour_vectorized(points, device=device)
+    elif fun_num == 2:  # pentagon
+        points.requires_grad_(True)
+        radius = data_gen_params.get('radius', 1.0)
+        rotation = data_gen_params.get('rotation', 0.0)
+        sdf_values = SDF.distance_from_pentagon_vectorized(points, radius=radius, rotation=rotation, device=device)
     elif fun_num == 4:  # L-shape
         closest_point, dist = SDF.get_closest_cntr_point_L_shape_vectorized(points)
         # where dist is zero the gradient shows inside the shape, so we need to handle that

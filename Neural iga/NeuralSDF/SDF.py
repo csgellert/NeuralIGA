@@ -281,6 +281,124 @@ def distance_from_star_contour_vectorized(coords, R=1, r=0.5, n=5, device=None):
         return signed_distances[0]
     
     return signed_distances
+
+def calculate_pentagon_vertices(radius=1.0, rotation=0.0, device=None):
+    """
+    Calculate vertices of a regular pentagon centered at origin.
+    
+    Args:
+        radius: float - circumradius of the pentagon (distance from center to vertices)
+        rotation: float - rotation angle in radians (offset for first vertex)
+        device: torch device for computation
+    
+    Returns:
+        tensor of shape (5, 2) - pentagon vertices
+    """
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    num_vertices = 5
+    angles = torch.arange(num_vertices, device=device, dtype=torch.float64) * 2 * math.pi / num_vertices + rotation
+    
+    x = radius * torch.cos(angles)
+    y = radius * torch.sin(angles)
+    
+    vertices = torch.stack([x, y], dim=1)
+    return vertices
+
+def is_points_inside_pentagon_vectorized(points, pentagon_vertices):
+    """
+    Vectorized ray-casting algorithm to check if points are inside the pentagon.
+    
+    Args:
+        points: tensor of shape (num_points, 2) - [x, y] coordinates
+        pentagon_vertices: tensor of shape (5, 2) - pentagon vertices
+    
+    Returns:
+        tensor of shape (num_points,) - boolean mask indicating which points are inside
+    """
+    num_points = points.shape[0]
+    num_vertices = pentagon_vertices.shape[0]
+    
+    # Extract x, y coordinates
+    x = points[:, 0]  # (num_points,)
+    y = points[:, 1]  # (num_points,)
+    
+    # Initialize inside mask
+    inside = torch.zeros(num_points, dtype=torch.bool, device=points.device)
+    
+    # For each edge of the pentagon
+    for i in range(num_vertices):
+        x1 = pentagon_vertices[i, 0]
+        y1 = pentagon_vertices[i, 1]
+        x2 = pentagon_vertices[(i + 1) % num_vertices, 0]
+        y2 = pentagon_vertices[(i + 1) % num_vertices, 1]
+        
+        # Ray-casting: check if horizontal ray from point crosses edge
+        crosses = ((y1 <= y) & (y < y2)) | ((y2 <= y) & (y < y1))
+        
+        # Calculate x-coordinate of intersection
+        x_intersect = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+        
+        # Check if intersection is to the right of point
+        crosses = crosses & (x < x_intersect)
+        
+        # Toggle inside flag for each crossing
+        inside = inside ^ crosses
+    
+    return inside
+
+def distance_from_pentagon_vectorized(coords, radius=1.0, rotation=0.0, device=None):
+    """
+    Vectorized calculation of signed distances from multiple points to a regular pentagon.
+    
+    Args:
+        coords: tensor of shape (num_points, 2) or (2,) for single point - [x, y] coordinates
+        radius: float - circumradius of the pentagon
+        rotation: float - rotation angle in radians
+        device: torch device for computation
+    
+    Returns:
+        tensor of shape (num_points,) or scalar - signed distances (positive inside, negative outside)
+    """
+    # Handle single point input
+    if coords.dim() == 1:
+        coords = coords.unsqueeze(0)
+        single_point = True
+    else:
+        single_point = False
+    
+    if device is None:
+        device = coords.device
+    
+    coords = coords.to(device)
+    
+    # Get pentagon vertices
+    pentagon_vertices = calculate_pentagon_vertices(radius=radius, rotation=rotation, device=device)
+    
+    # Create line segments from vertices
+    num_vertices = pentagon_vertices.shape[0]
+    line_starts = pentagon_vertices
+    line_ends = torch.roll(pentagon_vertices, shifts=-1, dims=0)  # Next vertex for each vertex
+    
+    # Calculate distances from all points to all line segments
+    distances = distance_points_to_line_segments_vectorized(coords, line_starts, line_ends)
+    
+    # Find minimum distance to any edge for each point
+    min_distances = torch.min(distances, dim=1)[0]  # (num_points,)
+    
+    # Determine if points are inside or outside the pentagon
+    inside_mask = is_points_inside_pentagon_vectorized(coords, pentagon_vertices)
+    
+    # Apply sign: positive if inside, negative if outside
+    signed_distances = torch.where(inside_mask, min_distances, -min_distances)
+    
+    # Return scalar if input was single point
+    if single_point:
+        return signed_distances[0]
+    
+    return signed_distances
+
 def distance_from_L_shape_vectorized(coords, device=None):
     """
     Vectorized calculation of distances from multiple points to an L-shaped domain.

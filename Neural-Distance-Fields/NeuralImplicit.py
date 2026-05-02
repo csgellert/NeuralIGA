@@ -1207,6 +1207,21 @@ def evaluate_model_random_points(
             )
         results["per_side"] = side_metrics
 
+    # General error: for each point, use only the error of the closest side (smallest |ground-truth|)
+    try:
+        abs_target = torch.abs(target)
+        closest_idx = torch.argmin(abs_target, dim=1)
+        arange = torch.arange(pred.shape[0], device=pred.device)
+        closest_err = abs_err[arange, closest_idx]
+        general_mae = float(closest_err.mean().item())
+        general_l_inf = float(closest_err.max().item())
+    except Exception:
+        general_mae = None
+        general_l_inf = None
+
+    results["global"]["general_closest_side_mae"] = general_mae
+    results["global"]["general_closest_side_l_inf"] = general_l_inf
+
     if verbose:
         g = results["global"]
         print(f"Model evaluation on N={results['N']} random points (function_case={results['function_case']}):")
@@ -1222,6 +1237,11 @@ def evaluate_model_random_points(
             f"  Hessian-diagonal errors (target 0): mean_abs={g['hessian_diag_mean_abs_error']:.6e}, "
             f"max_abs={g['hessian_diag_max_abs_error']:.6e}, L2={g['hessian_diag_l2_error']:.6e}"
         )
+        if g.get('general_closest_side_mae') is not None:
+            print(
+                f"  General (closest-side) errors: MAE={g['general_closest_side_mae']:.6e}, "
+                f"L_inf={g['general_closest_side_l_inf']:.6e}"
+            )
         if per_side_report and "per_side" in results:
             for sm in results["per_side"]:
                 print(
@@ -1503,9 +1523,9 @@ def plot_ground_truth_distance_fields(resolution=200, extent=(-1.0, 1.0, -1.0, 1
     return fig, axes, target_np
 
 
-def plot_nn_prediction_error(model, fun_num=1, resolution=200, extent=(-1.0, 1.0, -1.0, 1.0), *, device=None,
-                             data_gen_params={}, metric='abs', levels=64, show_zero_level=True, show=True,
-                             mask_outside_domain=True):
+def plot_nn_prediction_error(model, fun_num=1, resolution=300, extent=(-1.0, 1.0, -1.0, 1.0), *, device=None,
+                             data_gen_params={}, metric='abs', levels=100, show_zero_level=True, show=True,
+                             mask_outside_domain=True, use_log_scale=True, add_contours=True, cmap=None):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -1530,13 +1550,16 @@ def plot_nn_prediction_error(model, fun_num=1, resolution=200, extent=(-1.0, 1.0
 
     if metric == 'abs':
         err = torch.abs(pred - target)
-        cmap = 'hot'
+        if cmap is None:
+            cmap = 'viridis'
     elif metric == 'squared':
         err = (pred - target) ** 2
-        cmap = 'hot'
+        if cmap is None:
+            cmap = 'viridis'
     elif metric == 'signed':
         err = pred - target
-        cmap = 'coolwarm'
+        if cmap is None:
+            cmap = 'coolwarm'
     else:
         raise NotImplementedError(f"Metric {metric} not implemented")
 
@@ -1622,21 +1645,41 @@ def plot_nn_prediction_error(model, fun_num=1, resolution=200, extent=(-1.0, 1.0
 
     n_cols = int(np.ceil(np.sqrt(n_fields)))
     n_rows = int(np.ceil(n_fields / n_cols))
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.2 * n_cols, 3.8 * n_rows), squeeze=False)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.5 * n_cols, 5 * n_rows), squeeze=False)
     axes_flat = axes.ravel()
 
     for i in range(n_fields):
         ax = axes_flat[i]
         z = err_np[:, i].reshape(resolution, resolution)
         z_masked = np.ma.array(z, mask=~domain_mask)
-        cf = ax.contourf(X_np, Y_np, z_masked, levels=levels, cmap=cmap, corner_mask=True)
+        
+        # Apply log scaling if requested
+        if use_log_scale and np.all(z_masked[~z_masked.mask] > 0):
+            z_plot = np.ma.array(np.log10(z_masked.data + 1e-16), mask=~domain_mask)
+            scale_label = f'{metric} (log10)'
+        else:
+            z_plot = z_masked
+            scale_label = metric
+        
+        # Create filled contour plot
+        cf = ax.contourf(X_np, Y_np, z_plot, levels=levels, cmap=cmap, corner_mask=True)
+        
+        # Add contour line overlay for better visibility
+        if add_contours:
+            contour_lines = ax.contour(X_np, Y_np, z_plot, levels=12, colors='gray', 
+                                       linewidths=0.5, alpha=0.4, corner_mask=True)
+            ax.clabel(contour_lines, inline=True, fontsize=7, fmt='%.1e')
+        
         if show_zero_level:
-            ax.contour(X_np, Y_np, z_masked, levels=[0.0], colors='k', linewidths=1.2)
-        ax.set_title(f'Prediction error field {i} ({metric})')
+            ax.contour(X_np, Y_np, z_masked, levels=[0.0], colors='red', linewidths=1.5, linestyles='dashed')
+        
+        ax.set_title(f'Prediction error field {i} ({scale_label})', fontsize=11, fontweight='bold')
         ax.set_aspect('equal', adjustable='box')
         ax.set_xlabel('x')
         ax.set_ylabel('y')
-        fig.colorbar(cf, ax=ax, fraction=0.046, pad=0.04)
+        cbar = fig.colorbar(cf, ax=ax, fraction=0.046, pad=0.04)
+        if use_log_scale and np.all(err_np[:, i][domain_mask.ravel()] > 0):
+            cbar.set_label('log10(error)', fontsize=9)
 
     for j in range(n_fields, n_rows * n_cols):
         axes_flat[j].axis('off')

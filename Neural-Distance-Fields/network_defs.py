@@ -427,6 +427,93 @@ class PE_Siren(nn.Module):
         output = self.net(encoded_coords)
         return output
 
+class TSIREN(nn.Module):
+    """
+    Taylor Series SIREN (TSIREN): A SIREN variant that accumulates intermediate layer outputs.
+    
+    Based on the Taylor series approach where the final output is the sum of contributions from
+    each layer:
+        h_0 = x
+        h_i = σ(W_i h_{i-1} + b_i)
+        t_i = W_i^{out} h_i + b_i^{out}
+        y_0 = 0
+        y_i = y_{i-1} + t_i
+        
+    The final output is y_L = sum_{i=1}^{L} t_i
+    """
+    def __init__(self, architecture, outermost_linear=False,
+                 first_omega_0=60, hidden_omega_0=60):
+        super().__init__()
+        self.architecture = architecture
+        in_features = architecture[0]
+        out_features = architecture[-1]
+        hidden_layers = len(architecture) - 2
+
+        self.loss_history = []
+        self.error_distribution_history = []
+        self.weight_distribution_history = []
+        self.SDF_history = []
+        self.optimizer = None
+        self.name = "TSIREN"
+        self.lr_scheduler = None
+        self.error_history = {
+            "L1": [],
+            "L2": [],
+            "Linf": []
+        }
+
+        # Trunk: sine layers for computing h_i
+        self.trunk = nn.ModuleList()
+        self.trunk.append(SineLayer(in_features, architecture[1],
+                                    is_first=True, omega_0=first_omega_0))
+
+        for i in range(hidden_layers - 1):
+            self.trunk.append(SineLayer(architecture[i + 1], architecture[i + 2],
+                                       is_first=False, omega_0=hidden_omega_0))
+
+        # Output heads: one linear projection per hidden layer to compute t_i
+        self.output_heads = nn.ModuleList()
+        for i in range(hidden_layers):
+            head = nn.Linear(architecture[i + 1], out_features)
+            with torch.no_grad():
+                head.weight.uniform_(-np.sqrt(6 / architecture[i + 1]) / hidden_omega_0,
+                                    np.sqrt(6 / architecture[i + 1]) / hidden_omega_0)
+            self.output_heads.append(head)
+
+        # Final layer (optional sine or linear)
+        if outermost_linear:
+            self.final_layer = nn.Linear(architecture[-2], out_features)
+            with torch.no_grad():
+                self.final_layer.weight.uniform_(-np.sqrt(6 / architecture[-2]) / hidden_omega_0,
+                                                np.sqrt(6 / architecture[-2]) / hidden_omega_0)
+        else:
+            self.final_layer = SineLayer(architecture[-2], out_features,
+                                        is_first=False, omega_0=hidden_omega_0)
+        
+        self.outermost_linear = outermost_linear
+
+    def forward(self, coords):
+        """
+        Forward pass accumulating intermediate layer outputs.
+        
+        Returns the sum of all intermediate projections plus final layer output.
+        """
+        output = torch.zeros(coords.shape[0], self.architecture[-1], 
+                           device=coords.device, dtype=coords.dtype)
+
+        # Forward through trunk, accumulating contributions from each layer
+        h = coords
+        for i, trunk_layer in enumerate(self.trunk):
+            h = trunk_layer(h)
+            # Add contribution from this layer's output head: t_i = W_i^{out} h_i
+            output = output + self.output_heads[i](h)
+
+        # Apply final layer and add its contribution
+        final_out = self.final_layer(h)
+        output = output + final_out
+
+        return output
+
 class subnet_SIREN(nn.Module):
     def __init__(self, architecture, outermost_linear=False,
                  first_omega_0=60, hidden_omega_0=60):

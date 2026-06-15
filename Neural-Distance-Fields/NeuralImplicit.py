@@ -1035,6 +1035,406 @@ def _evaluate_ground_truth_on_points(pts, fun_num=1, data_gen_params={}):
     raise NotImplementedError(f"Ground-truth evaluation for fun_num={fun_num} is not implemented")
 
 
+def _compute_gt_side_gradients_fun1(pts, data_gen_params={}, eps=1e-12):
+    """
+    Analytical per-side gradients for function case 1 (regular n-gon side distances).
+
+    For each side distance field d_i, the gradient points from the closest point on
+    side i toward the query point, with unit length away from non-differentiable loci.
+
+    Returns:
+        gt_grads: (P, n_sides, 2)
+        side_dist: (P, n_sides)
+        valid_mask: (P, n_sides) where gradient direction is well-defined
+    """
+    if pts.ndim != 2 or pts.shape[1] != 2:
+        raise ValueError("pts must have shape (P, 2)")
+
+    n_sides = int(data_gen_params.get('n_sides', 5))
+    radius = float(data_gen_params.get('radius', 0.5))
+    center = data_gen_params.get('center', (0.0, 0.0))
+    rotation = float(data_gen_params.get('rotation', 0.0))
+
+    if n_sides < 3:
+        raise ValueError("n_sides must be at least 3 for function case 1")
+
+    device = pts.device
+    dtype = pts.dtype
+
+    cx = torch.as_tensor(center[0], device=device, dtype=dtype)
+    cy = torch.as_tensor(center[1], device=device, dtype=dtype)
+    angles = rotation + (2.0 * torch.pi / n_sides) * torch.arange(n_sides, device=device, dtype=dtype)
+    vertices = torch.stack((cx + radius * torch.cos(angles), cy + radius * torch.sin(angles)), dim=1)
+
+    v_next = torch.roll(vertices, shifts=-1, dims=0)
+    edges = v_next - vertices
+    edge_len_sq = torch.einsum("ni,ni->n", edges, edges)
+    edge_len_sq = torch.clamp(edge_len_sq, min=1e-14)
+
+    delta = pts[:, None, :] - vertices[None, :, :]
+    t = torch.einsum("pni,ni->pn", delta, edges) / edge_len_sq[None, :]
+    t = torch.clamp(t, 0.0, 1.0)
+    closest = vertices[None, :, :] + t[:, :, None] * edges[None, :, :]
+
+    vec = pts[:, None, :] - closest
+    side_dist = torch.linalg.norm(vec, dim=2)
+    valid_mask = side_dist > float(eps)
+
+    gt_grads = torch.zeros_like(vec)
+    if torch.any(valid_mask):
+        gt_grads[valid_mask] = vec[valid_mask] / side_dist[valid_mask].unsqueeze(1)
+
+    return gt_grads, side_dist, valid_mask
+
+
+def _masked_error_stats(err_tensor, valid_mask):
+    """Compute mean, max and L2 on masked entries."""
+    values = err_tensor[valid_mask]
+    if values.numel() == 0:
+        return {
+            "mean_abs_error": None,
+            "max_abs_error": None,
+            "l2_error": None,
+            "num_valid": 0,
+        }
+
+    return {
+        "mean_abs_error": float(values.mean().item()),
+        "max_abs_error": float(values.max().item()),
+        "l2_error": float(torch.sqrt(torch.mean(values ** 2)).item()),
+        "num_valid": int(values.numel()),
+    }
+
+
+def evaluate_gradient_errors_random_points_fun1(
+    model,
+    N,
+    *,
+    device=None,
+    data_gen_params={},
+    per_side_report=True,
+    verbose=True,
+    eps=1e-12,
+):
+    """
+    Evaluate gradient-length and gradient-direction errors on random points for case 1.
+
+    This compares model gradients against analytical ground-truth gradients of each
+    side-distance field for a regular n-gon.
+    """
+    if N <= 0:
+        raise ValueError("N must be a positive integer")
+
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    model.to(device)
+    model.eval()
+
+    pts, _ = generate_data(
+        int(N),
+        fun_num=1,
+        device=device,
+        data_gen_params=data_gen_params,
+        epsilon=0.0,
+    )
+
+    pts_eval = pts.detach().clone().requires_grad_(True)
+    pred = model(pts_eval)
+    if pred.ndim == 1:
+        pred = pred.unsqueeze(1)
+
+    gt_grads, gt_side_dist, gt_valid = _compute_gt_side_gradients_fun1(
+        pts_eval.detach(),
+        data_gen_params=data_gen_params,
+        eps=eps,
+    )
+
+    n_fields = pred.shape[1]
+    if gt_grads.shape[1] != n_fields:
+        raise ValueError(
+            f"Model output side count ({n_fields}) does not match case-1 GT side count ({gt_grads.shape[1]})."
+        )
+
+    pred_grad_list = []
+    pred_norm_list = []
+    for i in range(n_fields):
+        g_i = torch.autograd.grad(
+            outputs=pred[:, i].sum(),
+            inputs=pts_eval,
+            create_graph=False,
+            retain_graph=(i < n_fields - 1),
+        )[0]
+        pred_grad_list.append(g_i)
+        pred_norm_list.append(torch.linalg.norm(g_i, dim=1))
+
+    pred_grads = torch.stack(pred_grad_list, dim=1)
+    pred_norm = torch.stack(pred_norm_list, dim=1)
+    gt_norm = torch.linalg.norm(gt_grads, dim=2)
+
+    valid_mask = gt_valid & (pred_norm > float(eps))
+    length_error = torch.abs(pred_norm - gt_norm)
+
+    dot = torch.sum(pred_grads * gt_grads, dim=2)
+    denom = torch.clamp(pred_norm * gt_norm, min=float(eps))
+    cosine_sim = torch.clamp(dot / denom, -1.0, 1.0)
+    direction_error = 1.0 - cosine_sim
+
+    global_length = _masked_error_stats(length_error, valid_mask)
+    global_direction = _masked_error_stats(direction_error, valid_mask)
+
+    results = {
+        "N": int(N),
+        "function_case": 1,
+        "global": {
+            "grad_length_mean_abs_error": global_length["mean_abs_error"],
+            "grad_length_max_abs_error": global_length["max_abs_error"],
+            "grad_length_l2_error": global_length["l2_error"],
+            "grad_direction_mean_abs_error": global_direction["mean_abs_error"],
+            "grad_direction_max_abs_error": global_direction["max_abs_error"],
+            "grad_direction_l2_error": global_direction["l2_error"],
+            "num_valid": global_length["num_valid"],
+        },
+    }
+
+    if per_side_report:
+        per_side = []
+        for i in range(n_fields):
+            mask_i = valid_mask[:, i]
+            len_i = _masked_error_stats(length_error[:, i], mask_i)
+            dir_i = _masked_error_stats(direction_error[:, i], mask_i)
+            per_side.append(
+                {
+                    "side": i,
+                    "grad_length_mean_abs_error": len_i["mean_abs_error"],
+                    "grad_length_max_abs_error": len_i["max_abs_error"],
+                    "grad_length_l2_error": len_i["l2_error"],
+                    "grad_direction_mean_abs_error": dir_i["mean_abs_error"],
+                    "grad_direction_max_abs_error": dir_i["max_abs_error"],
+                    "grad_direction_l2_error": dir_i["l2_error"],
+                    "num_valid": len_i["num_valid"],
+                }
+            )
+        results["per_side"] = per_side
+
+    # General closest-boundary metric (closest among GT side distances).
+    try:
+        closest_idx = torch.argmin(gt_side_dist, dim=1)
+        arange = torch.arange(pts_eval.shape[0], device=pts_eval.device)
+        closest_valid = valid_mask[arange, closest_idx]
+        closest_len_err = length_error[arange, closest_idx]
+        closest_dir_err = direction_error[arange, closest_idx]
+
+        cl = _masked_error_stats(closest_len_err, closest_valid)
+        cd = _masked_error_stats(closest_dir_err, closest_valid)
+        results["global"]["closest_side_grad_length_mean_abs_error"] = cl["mean_abs_error"]
+        results["global"]["closest_side_grad_length_max_abs_error"] = cl["max_abs_error"]
+        results["global"]["closest_side_grad_direction_mean_abs_error"] = cd["mean_abs_error"]
+        results["global"]["closest_side_grad_direction_max_abs_error"] = cd["max_abs_error"]
+    except Exception:
+        results["global"]["closest_side_grad_length_mean_abs_error"] = None
+        results["global"]["closest_side_grad_length_max_abs_error"] = None
+        results["global"]["closest_side_grad_direction_mean_abs_error"] = None
+        results["global"]["closest_side_grad_direction_max_abs_error"] = None
+
+    if verbose:
+        g = results["global"]
+        print(f"Gradient-error evaluation on N={results['N']} random points (function_case=1):")
+        print(
+            f"  Length error: mean_abs={g['grad_length_mean_abs_error']:.6e}, "
+            f"max_abs={g['grad_length_max_abs_error']:.6e}, L2={g['grad_length_l2_error']:.6e}"
+        )
+        print(
+            f"  Direction error (1-cos): mean_abs={g['grad_direction_mean_abs_error']:.6e}, "
+            f"max_abs={g['grad_direction_max_abs_error']:.6e}, L2={g['grad_direction_l2_error']:.6e}"
+        )
+        if g.get("closest_side_grad_length_mean_abs_error") is not None:
+            print(
+                f"  Closest-side length mean_abs={g['closest_side_grad_length_mean_abs_error']:.6e}, "
+                f"max_abs={g['closest_side_grad_length_max_abs_error']:.6e}"
+            )
+            print(
+                f"  Closest-side direction mean_abs={g['closest_side_grad_direction_mean_abs_error']:.6e}, "
+                f"max_abs={g['closest_side_grad_direction_max_abs_error']:.6e}"
+            )
+        if per_side_report and "per_side" in results:
+            for sm in results["per_side"]:
+                print(
+                    f"  Side {sm['side']}: "
+                    f"len(mean_abs={sm['grad_length_mean_abs_error']:.6e}, "
+                    f"max_abs={sm['grad_length_max_abs_error']:.6e}, "
+                    f"L2={sm['grad_length_l2_error']:.6e}) | "
+                    f"dir(mean_abs={sm['grad_direction_mean_abs_error']:.6e}, "
+                    f"max_abs={sm['grad_direction_max_abs_error']:.6e}, "
+                    f"L2={sm['grad_direction_l2_error']:.6e})"
+                )
+
+    return results
+
+
+def plot_local_per_side_gradient_length_direction_error_fun1(
+    model,
+    resolution=200,
+    extent=(-1.0, 1.0, -1.0, 1.0),
+    *,
+    device=None,
+    data_gen_params={},
+    levels=64,
+    cmap_length='hot',
+    cmap_direction='viridis',
+    mask_outside_domain=True,
+    show=True,
+    robust_percentile=99.0,
+    per_side_scaling=False,
+    eps=1e-12,
+):
+    """
+    Plot per-side local gradient errors for case 1:
+    - top row: gradient length error | ||grad(phi_i)|| - ||grad(gt_i)|| |
+    - bottom row: gradient direction error 1 - cos(grad(phi_i), grad(gt_i))
+    """
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    model.to(device)
+    model.eval()
+
+    x_min, x_max, y_min, y_max = extent
+    X, Y = torch.meshgrid(
+        torch.linspace(x_min, x_max, resolution, device=device),
+        torch.linspace(y_min, y_max, resolution, device=device),
+    )
+    grid_points = torch.stack([X.ravel(), Y.ravel()], dim=-1).requires_grad_(True)
+
+    pred = model(grid_points)
+    if pred.ndim == 1:
+        pred = pred.unsqueeze(1)
+
+    gt_grads, _, gt_valid = _compute_gt_side_gradients_fun1(
+        grid_points.detach(),
+        data_gen_params=data_gen_params,
+        eps=eps,
+    )
+
+    n_fields = pred.shape[1]
+    if gt_grads.shape[1] != n_fields:
+        raise ValueError(
+            f"Model output side count ({n_fields}) does not match case-1 GT side count ({gt_grads.shape[1]})."
+        )
+
+    pred_grad_list = []
+    pred_norm_list = []
+    for i in range(n_fields):
+        g_i = torch.autograd.grad(
+            outputs=pred[:, i].sum(),
+            inputs=grid_points,
+            create_graph=False,
+            retain_graph=(i < n_fields - 1),
+        )[0]
+        pred_grad_list.append(g_i)
+        pred_norm_list.append(torch.linalg.norm(g_i, dim=1))
+
+    pred_grads = torch.stack(pred_grad_list, dim=1)
+    pred_norm = torch.stack(pred_norm_list, dim=1)
+    gt_norm = torch.linalg.norm(gt_grads, dim=2)
+
+    valid_mask = gt_valid & (pred_norm > float(eps))
+
+    length_error = torch.abs(pred_norm - gt_norm)
+    dot = torch.sum(pred_grads * gt_grads, dim=2)
+    denom = torch.clamp(pred_norm * gt_norm, min=float(eps))
+    cosine_sim = torch.clamp(dot / denom, -1.0, 1.0)
+    direction_error = 1.0 - cosine_sim
+
+    length_error = torch.where(valid_mask, length_error, torch.nan)
+    direction_error = torch.where(valid_mask, direction_error, torch.nan)
+
+    length_np = length_error.detach().cpu().numpy().reshape(resolution, resolution, n_fields)
+    direction_np = direction_error.detach().cpu().numpy().reshape(resolution, resolution, n_fields)
+    X_np = X.detach().cpu().numpy()
+    Y_np = Y.detach().cpu().numpy()
+
+    if mask_outside_domain:
+        n_sides = data_gen_params.get('n_sides', 5)
+        radius = data_gen_params.get('radius', 0.5)
+        center = data_gen_params.get('center', (0.0, 0.0))
+        rotation = data_gen_params.get('rotation', 0.0)
+        signed_dist = SDF.regular_ngon_side_signed_distances(
+            grid_points[:, 0].detach().cpu().numpy(),
+            grid_points[:, 1].detach().cpu().numpy(),
+            n_sides=n_sides,
+            radius=radius,
+            center=center,
+            rotation=rotation,
+            use_sign=True,
+            return_numpy=True,
+        )
+        signed_dist_np = np.asarray(signed_dist)
+        if signed_dist_np.ndim == 1:
+            signed_dist_np = signed_dist_np[:, None]
+        domain_mask = np.all(signed_dist_np >= 0.0, axis=1).reshape(resolution, resolution)
+    else:
+        domain_mask = np.ones((resolution, resolution), dtype=bool)
+
+    fig, axes = plt.subplots(2, n_fields, figsize=(4.4 * n_fields, 8.0), squeeze=False)
+
+    len_vals = np.asarray(length_np[domain_mask], dtype=np.float64).reshape(-1)
+    len_vals = len_vals[np.isfinite(len_vals)]
+    dir_vals = np.asarray(direction_np[domain_mask], dtype=np.float64).reshape(-1)
+    dir_vals = dir_vals[np.isfinite(dir_vals)]
+
+    global_len_vmax = float(np.percentile(len_vals, robust_percentile)) if len_vals.size > 0 else 1.0
+    global_dir_vmax = float(np.percentile(dir_vals, robust_percentile)) if dir_vals.size > 0 else 1.0
+    global_len_vmax = max(global_len_vmax, 1e-10)
+    global_dir_vmax = max(global_dir_vmax, 1e-10)
+    n_levels = max(2, int(levels))
+
+    for i in range(n_fields):
+        len_i = np.ma.array(length_np[:, :, i], mask=~domain_mask | ~np.isfinite(length_np[:, :, i]))
+        dir_i = np.ma.array(direction_np[:, :, i], mask=~domain_mask | ~np.isfinite(direction_np[:, :, i]))
+
+        if per_side_scaling:
+            lv = len_i.compressed()
+            dv = dir_i.compressed()
+            len_vmax_i = float(np.percentile(lv, robust_percentile)) if lv.size > 0 else global_len_vmax
+            dir_vmax_i = float(np.percentile(dv, robust_percentile)) if dv.size > 0 else global_dir_vmax
+            len_vmax_i = max(len_vmax_i, 1e-10)
+            dir_vmax_i = max(dir_vmax_i, 1e-10)
+        else:
+            len_vmax_i = global_len_vmax
+            dir_vmax_i = global_dir_vmax
+
+        len_levels = np.linspace(0.0, len_vmax_i, n_levels)
+        dir_levels = np.linspace(0.0, dir_vmax_i, n_levels)
+
+        ax_len = axes[0, i]
+        ax_dir = axes[1, i]
+
+        cf_len = ax_len.contourf(X_np, Y_np, np.ma.clip(len_i, 0.0, len_vmax_i), levels=len_levels, cmap=cmap_length)
+        ax_len.set_title(f'Side {i} length error')
+        ax_len.set_aspect('equal', adjustable='box')
+        ax_len.set_xlabel('x')
+        ax_len.set_ylabel('y')
+        fig.colorbar(cf_len, ax=ax_len, fraction=0.046, pad=0.04)
+
+        cf_dir = ax_dir.contourf(X_np, Y_np, np.ma.clip(dir_i, 0.0, dir_vmax_i), levels=dir_levels, cmap=cmap_direction)
+        ax_dir.set_title(f'Side {i} direction error (1-cos)')
+        ax_dir.set_aspect('equal', adjustable='box')
+        ax_dir.set_xlabel('x')
+        ax_dir.set_ylabel('y')
+        fig.colorbar(cf_dir, ax=ax_dir, fraction=0.046, pad=0.04)
+
+    fig.tight_layout()
+    if show:
+        plt.show()
+
+    return fig, axes, {
+        'length_error': length_np,
+        'direction_error': direction_np,
+        'domain_mask': domain_mask,
+    }
+
+
 def evaluate_model_random_points(
     model,
     function_case,

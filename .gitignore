@@ -20,6 +20,10 @@ collocation_matlab/
 
 # json files
 *.json
+*.csv
+
+# something matlab generates?
+*.asv
 
 #numpy savings
 *.npz

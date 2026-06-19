@@ -90,7 +90,7 @@ def _compute_signed_side_distances(pts, fun_num=1, data_gen_params={}):
 
     if fun_num == 1:
         n_sides = data_gen_params.get('n_sides', 5)
-        radius = data_gen_params.get('radius', 0.5)
+        radius = data_gen_params.get('radius', 1.0)
         center = data_gen_params.get('center', (0.0, 0.0))
         rotation = data_gen_params.get('rotation', 0.0)
 
@@ -285,7 +285,7 @@ def generate_data(batch_size, fun_num=1, device=None, data_gen_params={}, epsilo
         raise ValueError("epsilon must be >= 0")
     if fun_num == 1: #Ngon
         n_sides = data_gen_params.get('n_sides', 5)
-        radius = data_gen_params.get('radius', 0.5)
+        radius = data_gen_params.get('radius', 1)
         center = data_gen_params.get('center', (0.0, 0.0))
         rotation = data_gen_params.get('rotation', 0.0)
 
@@ -750,7 +750,7 @@ def generate_domain_boundary_points(num_points, fun_num=1, device=None, data_gen
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if fun_num == 1:
         n_sides = data_gen_params.get('n_sides', 5)
-        radius = data_gen_params.get('radius', 0.5)
+        radius = data_gen_params.get('radius', 1.0)
         center = data_gen_params.get('center', (0.0, 0.0))
         rotation = data_gen_params.get('rotation', 0.0)
 
@@ -958,7 +958,7 @@ def train_model_simple(model, num_epochs=100, batch_size=10000, fun_num=1, *, de
 def _evaluate_ground_truth_on_points(pts, fun_num=1, data_gen_params={}):
     if fun_num == 1:
         n_sides = data_gen_params.get('n_sides', 5)
-        radius = data_gen_params.get('radius', 0.5)
+        radius = data_gen_params.get('radius', 1)
         center = data_gen_params.get('center', (0.0, 0.0))
         rotation = data_gen_params.get('rotation', 0.0)
         gt_np = SDF.regular_ngon_side_signed_distances(
@@ -1693,7 +1693,7 @@ def plot_nn_distance_fields(model, resolution=200, extent=(-1.0, 1.0, -1.0, 1.0)
     if mask_outside_domain:
         if fun_num == 1:
             n_sides = data_gen_params.get('n_sides', 5)
-            radius = data_gen_params.get('radius', 0.5)
+            radius = data_gen_params.get('radius', 1)
             center = data_gen_params.get('center', (0.0, 0.0))
             rotation = data_gen_params.get('rotation', 0.0)
 
@@ -1824,7 +1824,7 @@ def plot_ground_truth_distance_fields(resolution=200, extent=(-1.0, 1.0, -1.0, 1
     if mask_outside_domain:
         if fun_num == 1:
             n_sides = data_gen_params.get('n_sides', 5)
-            radius = data_gen_params.get('radius', 0.5)
+            radius = data_gen_params.get('radius', 1)
             center = data_gen_params.get('center', (0.0, 0.0))
             rotation = data_gen_params.get('rotation', 0.0)
 
@@ -1971,7 +1971,7 @@ def plot_nn_prediction_error(model, fun_num=1, resolution=300, extent=(-1.0, 1.0
     if mask_outside_domain:
         if fun_num == 1:
             n_sides = data_gen_params.get('n_sides', 5)
-            radius = data_gen_params.get('radius', 0.5)
+            radius = data_gen_params.get('radius', 1)
             center = data_gen_params.get('center', (0.0, 0.0))
             rotation = data_gen_params.get('rotation', 0.0)
 
@@ -2140,7 +2140,7 @@ def plot_local_per_side_gradient_error(model, resolution=200, extent=(-1.0, 1.0,
     if mask_outside_domain:
         if fun_num == 1:
             n_sides = data_gen_params.get('n_sides', 5)
-            radius = data_gen_params.get('radius', 0.5)
+            radius = data_gen_params.get('radius', 1.0)
             center = data_gen_params.get('center', (0.0, 0.0))
             rotation = data_gen_params.get('rotation', 0.0)
             signed_dist = SDF.regular_ngon_side_signed_distances(
@@ -2352,7 +2352,7 @@ def plot_local_per_side_second_derivative(model, resolution=200, extent=(-1.0, 1
     if mask_outside_domain:
         if fun_num == 1:
             n_sides = data_gen_params.get('n_sides', 5)
-            radius = data_gen_params.get('radius', 0.5)
+            radius = data_gen_params.get('radius', 1.0)
             center = data_gen_params.get('center', (0.0, 0.0))
             rotation = data_gen_params.get('rotation', 0.0)
             signed_dist = SDF.regular_ngon_side_signed_distances(

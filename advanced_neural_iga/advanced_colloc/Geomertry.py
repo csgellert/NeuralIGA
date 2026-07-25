@@ -238,6 +238,16 @@ def ensure_vertices_ccw_np(vertices: np.ndarray) -> np.ndarray:
    return v
 
 
+def polygon_side_distances(crd: torch.Tensor, vertices_ccw: torch.Tensor) -> torch.Tensor:
+   """Return signed half-plane distances to every side of a convex polygon.
+
+   The result has shape ``(..., m)`` for an ``m``-sided polygon and is
+   positive inside the polygon, negative outside, and zero on the
+   corresponding side line.
+   """
+   return torch.stack(_halfplane_distances(crd, vertices_ccw), dim=-1)
+
+
 def l_shape_distance(crd):
    """Signed distance to the L-shaped domain boundary.
 
@@ -568,6 +578,127 @@ class AnaliticalDistancePentagon_RFunction(nn.Module):
       title = 'Pentagon weight function'
       title += ' (zero-preserving)' if self.preserve_zero_line else f' (k={self.smoothness})'
       plt.title(title)
+      plt.show()
+
+
+class AnaliticalDistancePentagon_SideDistances(nn.Module):
+   """Analytical 5-output pentagon distance model.
+
+   Each output is the signed distance to one side of a regular pentagon.
+   The outputs are ordered counter-clockwise and are positive inside the
+   pentagon, negative outside, and zero on the corresponding side line.
+   This makes the module suitable for inhomogeneous boundary enforcement
+   workflows that expect one distance-like value per side.
+   """
+
+   def __init__(
+      self,
+      radius: float = 0.9,
+      rotation: float = np.pi / 2,
+      center: tuple = (0.0, 0.0),
+   ):
+      super().__init__()
+      self._vertices_np = ensure_vertices_ccw_np(
+         regular_polygon_vertices_np(
+            5,
+            radius=float(radius),
+            center=center,
+            rotation=float(rotation),
+         ).astype(np.float64)
+      )
+
+   def forward(self, crd: torch.Tensor) -> torch.Tensor:
+      verts = crd.new_tensor(self._vertices_np)
+      return polygon_side_distances(crd, verts)
+
+   def as_weight_model(
+      self,
+      smoothness: float = 0.1,
+      preserve_zero_line: bool = True,
+   ) -> nn.Module:
+      """Return a scalar pentagon weight model built from the 5 side distances.
+
+      This adapter matches the interface expected by ``run_example`` and the
+      existing neural-model-based boundary workflow: it reduces the five side
+      distances to a single smooth weight function.
+      """
+      return AnaliticalDistancePentagon_SideDistances_Weight(
+         self,
+         smoothness=smoothness,
+         preserve_zero_line=preserve_zero_line,
+      )
+
+   def create_contour_plot(self, resolution=200):
+      x = np.linspace(-1.01, 1.01, resolution)
+      y = np.linspace(-1.01, 1.01, resolution)
+      X, Y = np.meshgrid(x, y)
+      crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+      with torch.no_grad():
+         Z = self.forward(crd).cpu().numpy()
+
+      fig, axes = plt.subplots(2, 3, figsize=(13, 8), constrained_layout=True)
+      axes = axes.ravel()
+
+      for side_idx in range(5):
+         ax = axes[side_idx]
+         contour = ax.contourf(X, Y, Z[..., side_idx], levels=50, cmap='viridis')
+         ax.contour(X, Y, Z[..., side_idx], levels=[0], colors='k', linewidths=1)
+         ax.set_title(f'Pentagon side distance {side_idx + 1}')
+         ax.set_xlabel('x')
+         ax.set_ylabel('y')
+         ax.set_aspect('equal', adjustable='box')
+         fig.colorbar(contour, ax=ax, fraction=0.046, pad=0.04)
+
+      axes[5].axis('off')
+      fig.suptitle('Analytical pentagon side distances', y=1.02)
+      plt.show()
+
+
+class AnaliticalDistancePentagon_SideDistances_Weight(nn.Module):
+   """Scalar weight function built from the five analytical pentagon side distances.
+
+   This is the compatibility layer for ``run_example`` and other code paths that
+   expect a single weight-like scalar field with autograd support.
+   """
+
+   def __init__(
+      self,
+      side_model: AnaliticalDistancePentagon_SideDistances,
+      smoothness: float = 0.1,
+      preserve_zero_line: bool = True,
+   ):
+      super().__init__()
+      self.side_model = side_model
+      self.smoothness = float(smoothness)
+      self.preserve_zero_line = bool(preserve_zero_line)
+
+   def forward(self, crd: torch.Tensor) -> torch.Tensor:
+      distances = self.side_model(crd)
+      result = distances[..., 0]
+      if self.preserve_zero_line:
+         for side_idx in range(1, distances.shape[-1]):
+            result = smooth_min_preserve_zero(result, distances[..., side_idx], eps=1e-12)
+      else:
+         for side_idx in range(1, distances.shape[-1]):
+            result = smooth_min(result, distances[..., side_idx], k=self.smoothness)
+      return result
+
+   def create_contour_plot(self, resolution=200):
+      x = np.linspace(-1.01, 1.01, resolution)
+      y = np.linspace(-1.01, 1.01, resolution)
+      X, Y = np.meshgrid(x, y)
+      crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+      with torch.no_grad():
+         Z = self.forward(crd).cpu().numpy()
+      plt.contourf(X, Y, Z, levels=50, cmap='viridis')
+      plt.colorbar(label='w')
+      plt.contour(X, Y, Z, levels=[0], colors='k', linewidths=1)
+      plt.xlabel('x')
+      plt.ylabel('y')
+      title = 'Analytical pentagon scalar weight'
+      title += ' (zero-preserving)' if self.preserve_zero_line else f' (k={self.smoothness})'
+      plt.title(title)
+      plt.gca().set_aspect('equal', adjustable='box')
       plt.show()
 
 class AnaliticalDistanceTriangle_SDF_Hollig(nn.Module):

@@ -1,7 +1,6 @@
 import collocation_WEB as cWEB
 import numpy as np
 import matplotlib.pyplot as plt
-import importlib
 from pathlib import Path
 import Geomertry
 import mesh
@@ -23,6 +22,8 @@ class sharp_min_distance_function(torch.nn.Module):
         distances = self.model(x)
         # Compute the sharp minimum distance function
         sharp_min_distances = torch.min(distances, dim=1).values
+        if PDE_testcases.FUNCTION_CASE == 11:
+            sharp_min_distances = torch.where(x[:,0]**2 + x[:,1]**2 > 1.0, torch.tensor(-1.0, dtype=x.dtype, device=x.device), sharp_min_distances)
         return sharp_min_distances
 class smooth_min_distance_function(torch.nn.Module):
     def __init__(self, model, alpha=10.0):
@@ -34,8 +35,23 @@ class smooth_min_distance_function(torch.nn.Module):
         distances = self.model(x)
         # Compute the smooth minimum distance function using log-sum-exp
         smooth_min_distances = -torch.logsumexp(-self.alpha * distances, dim=1) / self.alpha
+        if PDE_testcases.FUNCTION_CASE == 11:
+            smooth_min_distances = torch.where(x[:,0]**2 + x[:,1]**2 > 1.0, torch.tensor(-1.0, dtype=x.dtype, device=x.device), smooth_min_distances)
         return smooth_min_distances
-class smooth_min_preserve_zero_distance_function(torch.nn.Module):
+class smooth_min_distance_function_preserve_zero(torch.nn.Module):
+    def __init__(self, model, alpha=10.0):
+        super().__init__()
+        self.model = model
+        self.alpha = alpha
+
+    def forward(self, x):
+        distances = self.model(x)
+        # Compute the smooth minimum distance function using log-sum-exp
+        raise NotImplementedError
+        if PDE_testcases.FUNCTION_CASE == 11:
+            smooth_min_distances = torch.where(x[:,0]**2 + x[:,1]**2 > 1.0, torch.tensor(-1.0, dtype=x.dtype, device=x.device), smooth_min_distances)
+        return smooth_min_distances
+class smooth_min_preserve_zero_distance_function_2side(torch.nn.Module):
     def __init__(self, model, k):
         super().__init__()
         self.model = model
@@ -48,7 +64,10 @@ class smooth_min_preserve_zero_distance_function(torch.nn.Module):
         second = sorted[:,1]
         blended = (smallest*second)/((smallest+second))
         d = torch.where(smallest<0, -1, blended)
+        d = d**self.k
         #d = blended
+        if PDE_testcases.FUNCTION_CASE == 11:
+            d = torch.where(x[:,0]**2 + x[:,1]**2 > 1.0, torch.tensor(-1.0, dtype=x.dtype, device=x.device), d)
 
         return d
 
@@ -96,7 +115,7 @@ def get_bnd_value(function_case, d, s):
             bnd_values[i,2]=1**2 - (points[2,0]**2 + points[2,1]**2)    
             bnd_values[i,3]=1**2 - (points[3,0]**2 + points[3,1]**2)    
         #print("Boundary values for function case 11:", bnd_values)
-        #! ide a projekció kell TODO- ez most jó vagy sem??
+
     else:
         raise NotImplementedError(f"Function case {function_case} not implemented.")
     return bnd_values
@@ -108,8 +127,9 @@ def get_lifting(model, function_case, num_sides, points):
     ud = torch.sum((bnd_values/d), dim=1)/torch.sum((1/d), dim=1)
     # where any of d is negative set ud to 0
     ud[torch.any(d <= 0, dim=1)] = 0
-
-    print("Lifting values:", ud)
+    ud = torch.zeros_like(ud)
+    print("WARNING: Liftin off")
+    #print("Lifting values:", ud)
     return ud
 
 
@@ -329,10 +349,10 @@ if __name__ == "__main__":
     #get_s_param(model=model, numsides=5, point=torch.tensor([[0.4, 0.0],[0.1,0.1]]))
     
     
-    model_MS = netdefs.load_test_model("SIREN_pentagon_MSSDF_large", "SIREN", params={"architecture": [2, 256, 256, 256, 5], "w_0": 15, "w_hidden": 30.0})
+    model_MS = netdefs.load_test_model("SIREN_pentagon_MSSDF_02", "SIREN", params={"architecture": [2, 256, 256, 256, 5], "w_0": 15, "w_hidden": 30.0})
     #model = sharp_min_distance_function(model_MS)
-    #model = smooth_min_distance_function(model_MS, alpha=10.0)
-    model = smooth_min_preserve_zero_distance_function(model=model_MS, k = 1)
+    model = smooth_min_distance_function(model_MS, alpha=20.0)
+    #model = smooth_min_distance_function_preserve_zero(model=model_MS, alpha=5)
     get_lifting(model_MS, function_case=11, num_sides=5, points=torch.tensor([[0.4, 0.0],[0.1,0.1],[0,0]]))
 
     #plot the distance funcion over [-1,1]x[-1,1]
@@ -351,6 +371,6 @@ if __name__ == "__main__":
     plt.ylabel('Y')
     plt.axis('equal')
     plt.show()
-    plot_s_parameter_isocurves(model=model_MS, function_case=11, num_sides=5, N=200, extent=(-1, 1, -1, 1), levels=(0.1, 0.25, 0.5, 0.75, 0.9), cmap='viridis', show=True)
+    #plot_s_parameter_isocurves(model=model_MS, function_case=11, num_sides=5, N=200, extent=(-1, 1, -1, 1), levels=(0.1, 0.25, 0.5, 0.75, 0.9), cmap='viridis', show=True)
     plot_lifting_function(model=model_MS, function_case=11, num_sides=5, N=200, extent=(-1, 1, -1, 1), cmap='viridis', show=True)
     

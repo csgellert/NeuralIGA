@@ -593,7 +593,7 @@ class AnaliticalDistancePentagon_SideDistances(nn.Module):
 
    def __init__(
       self,
-      radius: float = 0.9,
+      radius: float = 1.0,
       rotation: float = np.pi / 2,
       center: tuple = (0.0, 0.0),
    ):

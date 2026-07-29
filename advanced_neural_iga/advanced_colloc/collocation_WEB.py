@@ -442,17 +442,39 @@ class NeuralWeightFunction(WeightFunction):
         wy_tensor = grad_w[:, 1]
         
         # Second derivatives
-        grad_wx = torch.autograd.grad(
-            outputs=wx_tensor.sum(),
-            inputs=xy_tensor,
-            retain_graph=True,
-        )[0]
-        
-        grad_wy = torch.autograd.grad(
-            outputs=wy_tensor.sum(),
-            inputs=xy_tensor,
-            retain_graph=False,
-        )[0]
+        zero_template = torch.zeros_like(xy_tensor)
+
+        if wx_tensor.requires_grad:
+            try:
+                grad_wx = torch.autograd.grad(
+                    outputs=wx_tensor.sum(),
+                    inputs=xy_tensor,
+                    retain_graph=True,
+                    allow_unused=True,
+                )[0]
+            except RuntimeError:
+                grad_wx = None
+        else:
+            grad_wx = None
+
+        if wy_tensor.requires_grad:
+            try:
+                grad_wy = torch.autograd.grad(
+                    outputs=wy_tensor.sum(),
+                    inputs=xy_tensor,
+                    retain_graph=False,
+                    allow_unused=True,
+                )[0]
+            except RuntimeError:
+                grad_wy = None
+        else:
+            grad_wy = None
+
+        if grad_wx is None:
+            grad_wx = zero_template
+
+        if grad_wy is None:
+            grad_wy = zero_template
         
         wxx_tensor = grad_wx[:, 0]
         wyy_tensor = grad_wy[:, 1]
@@ -726,19 +748,6 @@ def collocation_2d(
     # Δ((1-w) g) = -(wxx+wyy) g - 2(wx gx + wy gy) + (1-w)(gxx+gyy)
     # ---------------------------------------------------------------------
 
-    # Defaults for Dirichlet data: use FEM-prescribed boundary extension g(x,y).
-    # This reduces to the original homogeneous Dirichlet case when g ≡ 0.
-    if g is None:
-        g = PDE_testcases.dirichletBoundary_vectorized
-    else:
-        # If the user supplies a custom g, require derivatives to avoid silently
-        # using unrelated defaults (which would change the PDE being solved).
-        if gx is None or gy is None or gxx is None or gyy is None:
-            raise ValueError(
-                "Non-homogeneous Dirichlet requires g and its derivatives gx, gy, gxx, gyy. "
-                "Either omit g to use FEM defaults, or provide all derivative callables."
-            )
-
     # Set up coordinate transformation and Laplacian scaling.
     #
     # PDE is posed in physical coordinates (x_phys, y_phys):
@@ -770,17 +779,6 @@ def collocation_2d(
             return f_original(x_phys, y_phys)
 
         f = f_transformed
-
-        # Wrap g and derivatives so they accept grid coordinates and return grid-derivatives
-        g_original = g
-
-        def g_wrapped(x, y):
-            x_phys, y_phys = transform_to_physical(x, y)
-            return g_original(x_phys, y_phys)
-
-
-
-        g = g_wrapped
 
         if verbose:
             print(f"Domain transform: [0,1]² → [{domain['x1']},{domain['x2']}]×[{domain['y1']},{domain['y2']}]" )
@@ -1015,7 +1013,10 @@ def collocation_2d(
     # For non-homogeneous Dirichlet blending, modify RHS by Δ((1-w)g)
     # -------------------------------------------------------------------------
     F_rhs = f(xB, yB)
-    points = torch.tensor(np.column_stack((xB.flatten(), yB.flatten())), dtype=torch.float64)
+    # transform to physical coordinates if domain is specified
+    if domain is not None:
+        xB_phys, yB_phys = transform_to_physical(xB, yB)
+    points = torch.tensor(np.column_stack((xB_phys.flatten(), yB_phys.flatten())), dtype=torch.float64)
     gB = ihbnd.get_lifting(model=model,function_case = function_case, num_sides=5, points = points).detach().cpu().numpy().reshape(xB.shape)
     #gB = np.zeros_like(xB)  # Set gB to zero for now, as a placeholder #!todo
     print("line 1081 -> fiy this later!!! ")

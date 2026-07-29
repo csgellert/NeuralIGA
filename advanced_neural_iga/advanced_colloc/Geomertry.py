@@ -194,16 +194,25 @@ def convex_polygon_sdf(
 
 def hollig_transform(d: torch.Tensor, delta: float = 0.1, gamma: float = 3.0) -> torch.Tensor:
    """Höllig weight function applied to a signed distance field.
-
-   w(d) = 1 - clamp(1 - d/delta, min=0)^gamma
-
-   Maps: d=0 -> w=0 (boundary), d>=delta -> w=1 (deep inside).
-   For d<0 (outside), w<0. Smoothness class C^{gamma-1}.
-   Same formula as mesh.hollig_weight.
+   This variant produces a continuous mapping in [-1, 1] that:
+   - gives w=0 at the zero level-set (d==0),
+   - w->1 for d >= delta (deep inside),
+   - w->-1 for d <= -delta (far outside),
+   and is C^{gamma-1} smooth on both sides.
+   The transform is symmetric in the sense that behaviour for negative
+   distances mirrors the positive side while keeping continuity at 0.
    """
-   term = 1.0 - d / delta
-   term = torch.clamp(term, min=0.0)
-   return 1.0 - torch.pow(term, gamma)
+   # Ensure tensor type and device compatibility
+   zero = torch.tensor(0.0, dtype=d.dtype, device=d.device)
+   # positive side: d >= 0
+   t_pos = torch.clamp(1.0 - d / delta, min=0.0, max=1.0)
+   w_pos = 1.0 - torch.pow(t_pos, gamma)
+
+   # negative side: mirror using absolute distance but keep continuity at 0
+   t_neg = torch.clamp(1.0 - (-d) / delta, min=0.0, max=1.0)
+   w_neg = - (1.0 - torch.pow(t_neg, gamma))
+
+   return torch.where(d >= zero, w_pos, w_neg)
 
 
 def regular_polygon_vertices_np(

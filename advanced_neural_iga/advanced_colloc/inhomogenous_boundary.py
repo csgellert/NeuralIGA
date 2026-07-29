@@ -25,6 +25,23 @@ class sharp_min_distance_function(torch.nn.Module):
         if PDE_testcases.FUNCTION_CASE == 11:
             sharp_min_distances = torch.where(x[:,0]**2 + x[:,1]**2 > 1.0, torch.tensor(-1.0, dtype=x.dtype, device=x.device), sharp_min_distances)
         return sharp_min_distances
+class sharp_min_distance_function_hollig(torch.nn.Module):
+    def __init__(self, model, delta = 0.1, gamma = 3.0):
+        super().__init__()
+        self.model = model
+        self.delta = delta
+        self.gamma = gamma
+
+    def forward(self, x):
+        distances = self.model(x)
+        # Exact sharp minimum across the side distances.
+        sharp_min_distances = torch.min(distances, dim=1).values
+        # Apply Höllig transform to the scalar min distance (not the full side vector)
+        sharp_min_distances = Geomertry.hollig_transform(d=sharp_min_distances, delta=self.delta, gamma=self.gamma)
+        if PDE_testcases.FUNCTION_CASE == 11:
+            sharp_min_distances = torch.where(x[:,0]**2 + x[:,1]**2 > 1.0, torch.tensor(-1.0, dtype=x.dtype, device=x.device), sharp_min_distances)
+        return sharp_min_distances
+
 class smooth_min_distance_function(torch.nn.Module):
     def __init__(self, model, alpha=10.0):
         super().__init__()
@@ -127,7 +144,7 @@ def get_bnd_value(function_case, d, s):
         raise NotImplementedError(f"Function case {function_case} not implemented.")
     return bnd_values
 
-def get_lifting(model, function_case, num_sides, points, smoothness=1):
+def get_lifting(model, function_case, num_sides, points, smoothness=1.2):
     # Implementation for getting lifting coordinates
     d,s = get_s_param(model=model, numsides=num_sides, point=points)
     bnd_values = get_bnd_value(function_case, d, s)

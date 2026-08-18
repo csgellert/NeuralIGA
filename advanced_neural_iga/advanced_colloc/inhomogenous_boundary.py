@@ -144,7 +144,7 @@ def get_bnd_value(function_case, d, s):
         raise NotImplementedError(f"Function case {function_case} not implemented.")
     return bnd_values
 
-def get_lifting(model, function_case, num_sides, points, smoothness=1.2):
+def get_lifting(model, function_case, num_sides, points, smoothness=2):
     # Implementation for getting lifting coordinates
     d,s = get_s_param(model=model, numsides=num_sides, point=points)
     bnd_values = get_bnd_value(function_case, d, s)
@@ -154,6 +154,32 @@ def get_lifting(model, function_case, num_sides, points, smoothness=1.2):
     #ud = torch.zeros_like(ud)
     #print("WARNING: Liftin off")
     #print("Lifting values:", ud)
+    return ud
+
+def get_lifting_R(model, function_case, num_sides, points, smoothness=1):
+    # Build boundary selectors F_i directly from the implicit side distances.
+    # For each side i, F_i is the R-conjunction of all other side functions.
+    d, s = get_s_param(model=model, numsides=num_sides, point=points)
+    bnd_values = get_bnd_value(function_case, d, s)
+
+    def r_conjunction(a, b):
+        return a + b - torch.sqrt(a ** 2 + b ** 2)
+
+    selectors = []
+    for omit_idx in range(num_sides):
+        fi = None
+        for side_idx in range(num_sides):
+            if side_idx == omit_idx:
+                continue
+            fi = d[:, side_idx] if fi is None else r_conjunction(fi, d[:, side_idx])
+        selectors.append(fi)
+
+    fi = torch.stack(selectors, dim=1)
+    fi_sum = torch.sum(fi, dim=1, keepdim=True)
+    lambdas = torch.where(fi_sum > 0, fi / fi_sum, torch.zeros_like(fi))
+
+    ud = torch.sum(lambdas * bnd_values, dim=1)
+    ud[torch.any(d <= 0, dim=1)] = 0
     return ud
 
 

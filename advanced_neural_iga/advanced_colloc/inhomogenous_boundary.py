@@ -156,6 +156,84 @@ def get_lifting(model, function_case, num_sides, points, smoothness=2):
     #print("Lifting values:", ud)
     return ud
 
+
+def get_lifting_polygon(model, function_case, num_sides, points, smoothness=2, blend_method="wachspress", eps=1e-12):
+    """Polygon-aware lifting for convex domains.
+
+    This is an additional lifting helper that keeps the original
+    ``get_lifting`` unchanged and adds a separate blending strategy.
+
+    Supported blend methods:
+    - ``inverse_distance``: original side-distance weighted average.
+    - ``wachspress``: extended polygon blend using vertex weights built from
+      adjacent side distances, with corner values reconstructed from adjacent
+      side boundary values.
+    - ``coons``: extended Coons-style blend that first interpolates along the
+      polygon edges between corner values and then blends the edge patches by
+      side proximity.
+    """
+    d, s = get_s_param(model=model, numsides=num_sides, point=points)
+    bnd_values = get_bnd_value(function_case, d, s)
+
+    ud = torch.zeros(points.shape[0], dtype=d.dtype, device=d.device)
+    valid_mask = torch.all(d > 0, dim=1)
+    if not torch.any(valid_mask):
+        return ud
+
+    ds = d[valid_mask]
+    bs = bnd_values[valid_mask]
+    ss = s[valid_mask]
+
+    if blend_method == "inverse_distance":
+        ud_vals = torch.sum((bs / (ds ** smoothness + eps)), dim=1) / torch.sum((1.0 / (ds ** smoothness + eps)), dim=1)
+    else:
+        corner_values = []
+        for corner_idx in range(num_sides):
+            left_side = (corner_idx - 1) % num_sides
+            right_side = corner_idx % num_sides
+
+            left_bnd = bs[:, left_side]
+            right_bnd = bs[:, right_side]
+            left_dist = ds[:, left_side]
+            right_dist = ds[:, right_side]
+
+            corner_value = (left_bnd * right_dist + right_bnd * left_dist) / (left_dist + right_dist + eps)
+            corner_values.append(corner_value)
+
+        corner_values = torch.stack(corner_values, dim=1)
+
+        if blend_method == "wachspress":
+            vertex_weights = []
+            for corner_idx in range(num_sides):
+                left_side = (corner_idx - 1) % num_sides
+                right_side = corner_idx % num_sides
+                weight = 1.0 / ((ds[:, left_side] + eps) * (ds[:, right_side] + eps))
+                vertex_weights.append(weight)
+
+            vertex_weights = torch.stack(vertex_weights, dim=1)
+            vertex_weights = vertex_weights / (torch.sum(vertex_weights, dim=1, keepdim=True) + eps)
+            ud_vals = torch.sum(vertex_weights * corner_values, dim=1)
+
+        elif blend_method == "coons":
+            edge_values = []
+            for side_idx in range(num_sides):
+                left_corner = side_idx
+                right_corner = (side_idx + 1) % num_sides
+                t = ss[:, side_idx]
+                edge_values.append((1.0 - t) * corner_values[:, left_corner] + t * corner_values[:, right_corner])
+
+            edge_values = torch.stack(edge_values, dim=1)
+            side_weights = 1.0 / (ds ** smoothness + eps)
+            side_weights = side_weights / (torch.sum(side_weights, dim=1, keepdim=True) + eps)
+            ud_vals = torch.sum(side_weights * edge_values, dim=1)
+
+        else:
+            raise ValueError(f"Unknown blend_method '{blend_method}'. Use 'inverse_distance', 'wachspress', or 'coons'.")
+
+    ud[valid_mask] = ud_vals
+    ud[torch.any(d <= 0, dim=1)] = 0
+    return ud
+
 def get_lifting_R(model, function_case, num_sides, points, smoothness=1):
     # Build boundary selectors F_i directly from the implicit side distances.
     # For each side i, F_i is the R-conjunction of all other side functions.
@@ -182,6 +260,144 @@ def get_lifting_R(model, function_case, num_sides, points, smoothness=1):
     ud[torch.any(d <= 0, dim=1)] = 0
     return ud
 
+
+def get_lifting_tfi(model, function_case, num_sides, points, smoothness=1, corner_strength=2.0, eps=1e-12):
+    """Compute lifting using a generalized transfinite interpolation (TFI)
+    with corner correction.
+
+    This method blends side boundary values using inverse-distance-type
+    weights and adds vertex (corner) contributions computed from adjacent
+    side values. The corner contributions are weighted by the product of
+    adjacent side weights and a tunable `corner_strength`.
+
+    Parameters
+    - model, function_case, num_sides, points: same conventions as
+      ``get_lifting``.
+    - smoothness: exponent for inverse-distance weighting (>=0).
+    - corner_strength: multiplicative weight applied to corner terms.
+    - eps: small regularizer to avoid division by zero.
+
+    Returns
+    - ud: Tensor of lifting values with shape (N,)
+    """
+    d, s = get_s_param(model=model, numsides=num_sides, point=points)
+    bnd_values = get_bnd_value(function_case, d, s)
+
+    # result tensor
+    ud = torch.zeros(points.shape[0], dtype=d.dtype, device=d.device)
+
+    # Only compute for points where all side distances are positive
+    valid_mask = torch.all(d > 0, dim=1)
+    if not torch.any(valid_mask):
+        return ud
+
+    ds = d[valid_mask]
+    bs = bnd_values[valid_mask]
+
+    # inverse-distance weights (similar spirit to get_lifting)
+    side_w = 1.0 / (ds ** smoothness + eps)
+    side_w_sum = torch.sum(side_w, dim=1, keepdim=True)
+    side_w = side_w / (side_w_sum + eps)
+
+    # side contribution
+    side_num = torch.sum(side_w * bs, dim=1)
+
+    # build vertex values as averages of adjacent side boundary values
+    n = num_sides
+    # bs: (M, n)
+    v_vals = []
+    for i in range(n):
+        j = (i + 1) % n
+        v_vals.append(0.5 * (bs[:, i] + bs[:, j]))
+    v_vals = torch.stack(v_vals, dim=1)  # (M, n) vertex contributions indexed by vertex i
+
+    # corner weights: product of adjacent normalized side weights
+    corner_w = []
+    for i in range(n):
+        j = (i + 1) % n
+        corner_w.append(side_w[:, i] * side_w[:, j])
+    corner_w = torch.stack(corner_w, dim=1)  # (M, n)
+
+    corner_num = torch.sum(corner_w * v_vals, dim=1)
+    corner_den = torch.sum(corner_w, dim=1)
+
+    num = side_num + corner_strength * corner_num
+    den = torch.sum(side_w, dim=1) + corner_strength * corner_den + eps
+
+    ud_vals = num / den
+
+    ud[valid_mask] = ud_vals
+    # where any of d is negative set ud to 0 (outside/intersecting cases)
+    ud[torch.any(d <= 0, dim=1)] = 0
+    return ud
+
+
+def get_lifting_corner(model, function_case, num_sides, points, smoothness=1, eps=1e-12, closest_corner_only=False):
+    # Corner-based lifting: interpolate the two sides meeting at each corner,
+    # then blend the corner values using distance-to-corner weights.
+    d, s = get_s_param(model=model, numsides=num_sides, point=points)
+    bnd_values = get_bnd_value(function_case, d, s)
+
+    if function_case == 11:
+        vertices = torch.tensor(
+            Geomertry.regular_polygon_vertices_np(n_sides=num_sides, radius=1, center=(0, 0)),
+            dtype=torch.float64,
+            device=points.device,
+        )
+    else:
+        raise NotImplementedError(f"Function case {function_case} not implemented.")
+
+    ud = torch.zeros(points.shape[0], dtype=d.dtype, device=d.device)
+
+    valid_mask = torch.all(d > 0, dim=1)
+    if not torch.any(valid_mask):
+        return ud
+
+    ds = d[valid_mask]
+    bs = bnd_values[valid_mask]
+    pts = points[valid_mask]
+
+    #apply hollig transform to the distance values
+    #ds = Geomertry.hollig_transform(d=ds, delta=0.05, gamma=1.0)
+    
+    # Build one corner value per vertex.
+    # Corner i is formed by side i-1 and side i (cyclic indexing).
+    corner_values = []
+    for corner_idx in range(num_sides):
+        left_side = (corner_idx - 1) % num_sides
+        right_side = corner_idx % num_sides
+
+        left_bnd = bs[:, left_side]
+        right_bnd = bs[:, right_side]
+        left_dist = ds[:, left_side]
+        right_dist = ds[:, right_side]
+
+        # Inverse-distance interpolation between the two boundary values.
+        corner_value = (left_bnd * right_dist + right_bnd * left_dist) / (left_dist + right_dist + eps)
+        corner_values.append(corner_value)
+
+    corner_values = torch.stack(corner_values, dim=1)
+
+    # Blend the corner contributions by distance to the corresponding vertex.
+    corner_distances = torch.sqrt(torch.sum((pts[:, None, :] - vertices[None, :, :]) ** 2, dim=2) + eps)
+    # Old blending rule kept for reference:
+    corner_weights = 1.0 / (corner_distances ** smoothness + eps)
+    corner_weights = corner_weights / (torch.sum(corner_weights, dim=1, keepdim=True) + eps)
+
+    # Alternative blending: softmax over negative corner distances.
+    # This gives a smoother preference for the closest corner without
+    # letting distant corners dominate as strongly as inverse-distance weights.
+    #corner_scale = torch.clamp(torch.as_tensor(smoothness, dtype=d.dtype, device=d.device), min=eps)
+    #corner_weights = torch.softmax(-corner_distances / corner_scale, dim=1)
+    if closest_corner_only:
+        closest_corner = torch.argmin(corner_distances, dim=1)
+        corner_weights = torch.zeros_like(corner_weights)
+        corner_weights.scatter_(1, closest_corner[:, None], 1.0)
+
+    ud_vals = torch.sum(corner_weights * corner_values, dim=1)
+    ud[valid_mask] = ud_vals
+    ud[torch.any(d <= 0, dim=1)] = 0
+    return ud
 
 def plot_case_11_poisson_samples(
     recon_info,

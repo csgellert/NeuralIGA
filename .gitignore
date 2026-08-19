@@ -25,6 +25,8 @@ collocation_matlab/
 # something matlab generates?
 *.asv
 
+lightning
+
 #numpy savings
 *.npz
 

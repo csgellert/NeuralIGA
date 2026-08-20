@@ -683,6 +683,7 @@ def collocation_2d(
     return_coefficients: bool = False,
     model: Optional[torch.nn.Module] = None,
     function_case: Optional[int] = 11, #!TODO
+    bundary_enforcement: Optional[str] = "lifting"
 ):
     """
     Solve -Δu = f on D: w(x,y) > 0, with u = 0 on ∂D.
@@ -1010,15 +1011,30 @@ def collocation_2d(
     
     # -------------------------------------------------------------------------
     # Right-hand side
-    # For non-homogeneous Dirichlet blending, modify RHS by Δ((1-w)g)
+    # For non-homogeneous Dirichlet blending, modify RHS by Δ((1-w)g) - #! THe 1-w in not used
     # -------------------------------------------------------------------------
     F_rhs = f(xB, yB)
     # transform to physical coordinates if domain is specified
     if domain is not None:
         xB_phys, yB_phys = transform_to_physical(xB, yB)
     points = torch.tensor(np.column_stack((xB_phys.flatten(), yB_phys.flatten())), dtype=torch.float64)
-    gB = ihbnd.get_lifting(model=model,function_case = function_case, num_sides=5, points = points).detach().cpu().numpy().reshape(xB.shape)
-    #gB = np.zeros_like(xB)  # Set gB to zero for now, as a placeholder #!todo
+    #gB = ihbnd.get_lifting(model=model,function_case = function_case, num_sides=5, points = points).detach().cpu().numpy().reshape(xB.shape)
+    #! Ezek a jók (kövi 3 sor...)
+    if bundary_enforcement == "lifting":
+        gB, gB_lp = ihbnd.get_lifting_laplacian(model=model,function_case = function_case, num_sides=5, points = points)
+        gB = gB.detach().cpu().numpy().reshape(xB.shape) 
+        gB_lp = gB_lp.detach().cpu().numpy().reshape(xB.shape)
+    elif bundary_enforcement == "lightning":
+        import lightning_laplace
+        sol = lightning_laplace.solve_case_11(tolerance = 1e-6)
+        gB = sol(xB_phys, yB_phys).reshape(xB.shape)
+        gB_lp = np.zeros_like(xB)  # Set gB_lp to zero for now, as a placeholder #!todo
+    elif bundary_enforcement == "none":
+        gB = np.zeros_like(xB)  # Set gB to zero for now, as a placeholder #!todo
+        gB_lp = np.zeros_like(xB)  # Set gB_lp to zero for now, as a placeholder #!todo
+    else: 
+        raise ValueError(f"Unknown boundary enforcement method: {bundary_enforcement}")
+
     print("line 1081 -> fiy this later!!! ")
 
     # Δ_phys((1-w)g) in grid derivatives:
@@ -1026,7 +1042,8 @@ def collocation_2d(
     """F_rhs = F_rhs + (
         -((ax * wxxB) + (ay * wyyB)) * gB
     )"""
-    
+    #! Has been altered:
+    F_rhs = F_rhs + gB_lp
     # Convert G array to sparse matrix
     SG = array_to_matrix(G)
     
@@ -1147,6 +1164,7 @@ def reconstruct_collocation_at_points(
     recon_info: Dict,
     wfct_phys: 'NeuralWeightFunction',
     model_ms: Optional[torch.nn.Module] = None,
+    lifting_method: Optional[str] = "get_lifting"
 ) -> np.ndarray:
     """Evaluate collocation solution at arbitrary physical-coordinate points.
 
@@ -1209,8 +1227,15 @@ def reconstruct_collocation_at_points(
     u_h = np.maximum(w_vals, 0.0) * v 
 
     if model_ms is not None:
-        lifting = ihbnd.get_lifting(model=model_ms,function_case = 11, num_sides=5, points = torch.tensor(np.column_stack((pts_x, pts_y)), dtype=torch.float64)).detach().cpu().numpy()
-        u_h += lifting
+        if lifting_method == "get_lifting":
+            lifting = ihbnd.get_lifting(model=model_ms,function_case = 11, num_sides=5, points = torch.tensor(np.column_stack((pts_x, pts_y)), dtype=torch.float64)).detach().cpu().numpy()
+            u_h += lifting
+        elif lifting_method == "lightning":
+            raise NotImplementedError("Lightning lifting method is not implemented yet.")
+        elif lifting_method == "none":
+            pass  # No lifting applied
+        else:
+            raise ValueError(f"Unknown lifting method: {lifting_method}")
     else: print("AAAAAAA")
 
     return u_h
@@ -1402,7 +1427,8 @@ def run_example(
     dense_threshold: int = 2000,
     plot_mode: str = "3d",
     return_coefficients: bool = False,
-    model_ms = None
+    model_ms = None,
+    boundary_enforcement: str = "lifting"
 ):
     """
     Run the collocation example.
@@ -1460,6 +1486,7 @@ def run_example(
             model=model_ms,
             function_case=active_case,
             return_coefficients=return_coefficients,
+            bundary_enforcement=boundary_enforcement
         )
 
         if return_coefficients:

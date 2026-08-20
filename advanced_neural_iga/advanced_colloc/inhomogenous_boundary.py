@@ -95,9 +95,12 @@ class R_func_min(torch.nn.Module):
             union_dist = torch.where(x[:,0]**2 + x[:,1]**2 > 1.0, torch.tensor(-1.0, dtype=x.dtype, device=x.device), union_dist)
         return union_dist
 
-def get_s_param(model = model, numsides=4, point=None):
-    with torch.no_grad():
+def get_s_param(model = model, numsides=4, point=None, track_grad=False):
+    if track_grad:
         distances = model(point)
+    else:
+        with torch.no_grad():
+            distances = model(point)
     assert distances.shape[1] == numsides
     s_coords = torch.zeros_like(distances)
     distances_ext = torch.cat([distances, distances[:, :2]], dim=1)
@@ -108,6 +111,13 @@ def get_s_param(model = model, numsides=4, point=None):
     s_coords = torch.cat([s_coords[:, -1:], s_coords[:, :-1]], dim=1)
     #print(s_coords)
     return distances, s_coords
+
+
+def _compute_lifting_values(d, bnd_values, smoothness=2):
+    weights = 1.0 / (d ** smoothness)
+    ud = torch.sum(bnd_values * weights, dim=1) / torch.sum(weights, dim=1)
+    valid_mask = torch.all(d > 0, dim=1)
+    return torch.where(valid_mask, ud, torch.zeros_like(ud))
 
 def get_bnd_value(function_case, d, s):
     bnd_values = torch.zeros_like(d)
@@ -135,26 +145,105 @@ def get_bnd_value(function_case, d, s):
 
             bnd_values[i,0]=0
             bnd_values[i,4]=0
-            bnd_values[i,1]=1**2 - (points[1,0]**2 + points[1,1]**2)    
-            bnd_values[i,2]=1**2 - (points[2,0]**2 + points[2,1]**2)    
-            bnd_values[i,3]=1**2 - (points[3,0]**2 + points[3,1]**2)    
+            bnd_values[i,1]=1**2 - (points[1,0]**2 + points[1,1]**2)
+            bnd_values[i,2]=1**2 - (points[2,0]**2 + points[2,1]**2)
+            bnd_values[i,3]=1**2 - (points[3,0]**2 + points[3,1]**2)
         #print("Boundary values for function case 11:", bnd_values)
 
     else:
         raise NotImplementedError(f"Function case {function_case} not implemented.")
     return bnd_values
 
+
 def get_lifting(model, function_case, num_sides, points, smoothness=2):
     # Implementation for getting lifting coordinates
     d,s = get_s_param(model=model, numsides=num_sides, point=points)
     bnd_values = get_bnd_value(function_case, d, s)
-    ud = torch.sum((bnd_values/d**smoothness), dim=1)/torch.sum((1/d**smoothness), dim=1)
-    # where any of d is negative set ud to 0
-    ud[torch.any(d <= 0, dim=1)] = 0
+    ud = _compute_lifting_values(d=d, bnd_values=bnd_values, smoothness=smoothness)
     #ud = torch.zeros_like(ud)
     #print("WARNING: Liftin off")
     #print("Lifting values:", ud)
     return ud
+
+
+def get_lifting_with_derivatives(model, function_case, num_sides, points, smoothness=2):
+    """Return lifting values together with first and second derivatives.
+
+    Returns
+    -------
+    ud : Tensor, shape (N,)
+        Lifting values.
+    dud : Tensor, shape (N, 2)
+        First derivatives with respect to ``x`` and ``y``.
+    hess_ud : Tensor, shape (N, 2, 2)
+        Hessian matrix of the lifting function for each input point.
+    """
+    if not points.requires_grad:
+        points = points.detach().clone().requires_grad_(True)
+
+    d, s = get_s_param(model=model, numsides=num_sides, point=points, track_grad=True)
+    bnd_values = get_bnd_value(function_case, d, s)
+    ud = _compute_lifting_values(d=d, bnd_values=bnd_values, smoothness=smoothness)
+
+    dud = torch.autograd.grad(
+        outputs=ud.sum(),
+        inputs=points,
+        create_graph=True,
+        retain_graph=True,
+    )[0]
+
+    hess_rows = []
+    for axis_idx in range(points.shape[1]):
+        second = torch.autograd.grad(
+            outputs=dud[:, axis_idx].sum(),
+            inputs=points,
+            retain_graph=axis_idx < points.shape[1] - 1,
+            allow_unused=False,
+        )[0]
+        hess_rows.append(second)
+
+    hess_ud = torch.stack(hess_rows, dim=1)
+    return ud, dud, hess_ud
+
+
+def get_lifting_laplacian(model, function_case, num_sides, points, smoothness=2):
+    """Return only the exact Laplacian of the lifting function.
+
+    This is cheaper than ``get_lifting_with_derivatives`` because it avoids
+    building the full Hessian tensor and computes only the trace of the
+    Hessian, i.e. ``d2u/dx2 + d2u/dy2``.
+
+    Returns
+    -------
+    ud : Tensor, shape (N,)
+        Lifting values.
+    lap_ud : Tensor, shape (N,)
+        Exact Laplacian of the lifting function at the input points.
+    """
+    if not points.requires_grad:
+        points = points.detach().clone().requires_grad_(True)
+
+    d, s = get_s_param(model=model, numsides=num_sides, point=points, track_grad=True)
+    bnd_values = get_bnd_value(function_case, d, s)
+    ud = _compute_lifting_values(d=d, bnd_values=bnd_values, smoothness=smoothness)
+
+    grad_ud = torch.autograd.grad(
+        outputs=ud.sum(),
+        inputs=points,
+        create_graph=True,
+        retain_graph=True,
+    )[0]
+
+    lap_ud = torch.zeros_like(ud)
+    for axis_idx in range(points.shape[1]):
+        second_axis = torch.autograd.grad(
+            outputs=grad_ud[:, axis_idx].sum(),
+            inputs=points,
+            retain_graph=axis_idx < points.shape[1] - 1,
+        )[0][:, axis_idx]
+        lap_ud = lap_ud + second_axis
+
+    return ud, lap_ud
 
 
 def get_lifting_polygon(model, function_case, num_sides, points, smoothness=2, blend_method="wachspress", eps=1e-12):
@@ -407,6 +496,7 @@ def plot_case_11_poisson_samples(
     show: bool = True,
     filename: str = "poisson_samples_hom_1_e_3.csv",
     model_ms=None,
+    lifting_method: str = "get_lifting",
 ):
     """Plot ground truth, reconstructed solution, and absolute error for case 11.
 
@@ -428,7 +518,7 @@ def plot_case_11_poisson_samples(
     gt = np.asarray(data["u"], dtype=np.float64).ravel()
 
     wfct_phys = cWEB.NeuralWeightFunction(model=model, domain=None)
-    pred = cWEB.reconstruct_collocation_at_points(pts_x, pts_y, recon_info, wfct_phys, model_ms=model_ms)
+    pred = cWEB.reconstruct_collocation_at_points(pts_x, pts_y, recon_info, wfct_phys, model_ms=model_ms, lifting_method=lifting_method)
     error = pred - gt
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.8), constrained_layout=True)
@@ -440,12 +530,12 @@ def plot_case_11_poisson_samples(
     ]
 
     for ax, (values, title, cmap) in zip(axes, plots):
-        scatter = ax.scatter(pts_x, pts_y, c=values, s=36, cmap=cmap, edgecolors="none")
+        contour = ax.tricontourf(pts_x, pts_y, values, levels=50, cmap=cmap)
         ax.set_aspect("equal", adjustable="box")
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_title(title)
-        fig.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04)
+        fig.colorbar(contour, ax=ax, fraction=0.046, pad=0.04)
 
     if show:
         plt.show()

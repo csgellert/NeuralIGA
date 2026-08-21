@@ -246,7 +246,16 @@ def get_lifting_laplacian(model, function_case, num_sides, points, smoothness=2)
     return ud, lap_ud
 
 
-def get_lifting_polygon(model, function_case, num_sides, points, smoothness=2, blend_method="wachspress", eps=1e-12):
+def get_lifting_polygon(
+    model,
+    function_case,
+    num_sides,
+    points,
+    smoothness=2,
+    blend_method="wachspress",
+    eps=1e-12,
+    return_laplacian=False,
+):
     """Polygon-aware lifting for convex domains.
 
     This is an additional lifting helper that keeps the original
@@ -260,13 +269,26 @@ def get_lifting_polygon(model, function_case, num_sides, points, smoothness=2, b
     - ``coons``: extended Coons-style blend that first interpolates along the
       polygon edges between corner values and then blends the edge patches by
       side proximity.
+
+    If ``return_laplacian`` is true, return ``(ud, lap_ud)`` and compute the
+    exact Laplacian without materializing the full Hessian.
     """
-    d, s = get_s_param(model=model, numsides=num_sides, point=points)
+    if return_laplacian and not points.requires_grad:
+        points = points.detach().clone().requires_grad_(True)
+
+    d, s = get_s_param(
+        model=model,
+        numsides=num_sides,
+        point=points,
+        track_grad=return_laplacian,
+    )
     bnd_values = get_bnd_value(function_case, d, s)
 
     ud = torch.zeros(points.shape[0], dtype=d.dtype, device=d.device)
     valid_mask = torch.all(d > 0, dim=1)
     if not torch.any(valid_mask):
+        if return_laplacian:
+            return ud, torch.zeros_like(ud)
         return ud
 
     ds = d[valid_mask]
@@ -321,6 +343,25 @@ def get_lifting_polygon(model, function_case, num_sides, points, smoothness=2, b
 
     ud[valid_mask] = ud_vals
     ud[torch.any(d <= 0, dim=1)] = 0
+
+    if return_laplacian:
+        grad_ud = torch.autograd.grad(
+            outputs=ud.sum(),
+            inputs=points,
+            create_graph=True,
+            retain_graph=True,
+        )[0]
+
+        lap_ud = torch.zeros_like(ud)
+        for axis_idx in range(points.shape[1]):
+            second_axis = torch.autograd.grad(
+                outputs=grad_ud[:, axis_idx].sum(),
+                inputs=points,
+                retain_graph=axis_idx < points.shape[1] - 1,
+            )[0][:, axis_idx]
+            lap_ud = lap_ud + second_axis
+        return ud, lap_ud
+
     return ud
 
 def get_lifting_R(model, function_case, num_sides, points, smoothness=1):

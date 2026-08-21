@@ -1019,7 +1019,7 @@ def collocation_2d(
         xB_phys, yB_phys = transform_to_physical(xB, yB)
     points = torch.tensor(np.column_stack((xB_phys.flatten(), yB_phys.flatten())), dtype=torch.float64)
     #gB = ihbnd.get_lifting(model=model,function_case = function_case, num_sides=5, points = points).detach().cpu().numpy().reshape(xB.shape)
-    #! Ezek a jók (kövi 3 sor...)
+
     if bundary_enforcement == "lifting":
         gB, gB_lp = ihbnd.get_lifting_laplacian(model=model,function_case = function_case, num_sides=5, points = points)
         gB = gB.detach().cpu().numpy().reshape(xB.shape) 
@@ -1032,6 +1032,16 @@ def collocation_2d(
     elif bundary_enforcement == "none":
         gB = np.zeros_like(xB)  # Set gB to zero for now, as a placeholder #!todo
         gB_lp = np.zeros_like(xB)  # Set gB_lp to zero for now, as a placeholder #!todo
+    elif bundary_enforcement == "wachspress":
+        gB, gB_lp = ihbnd.get_lifting_polygon(model=model,function_case = function_case, num_sides=5, points = points,
+                                              smoothness=1, blend_method="wachspress", eps=1e-12, return_laplacian=True)
+        gB = gB.detach().cpu().numpy().reshape(xB.shape) 
+        gB_lp = gB_lp.detach().cpu().numpy().reshape(xB.shape)
+    elif bundary_enforcement == "coons":
+        gB, gB_lp = ihbnd.get_lifting_polygon(model=model,function_case = function_case, num_sides=5, points = points,
+                                            smoothness=1, blend_method="coons", eps=1e-12, return_laplacian=True)
+        gB = gB.detach().cpu().numpy().reshape(xB.shape) 
+        gB_lp = gB_lp.detach().cpu().numpy().reshape(xB.shape)
     else: 
         raise ValueError(f"Unknown boundary enforcement method: {bundary_enforcement}")
 
@@ -1231,9 +1241,22 @@ def reconstruct_collocation_at_points(
             lifting = ihbnd.get_lifting(model=model_ms,function_case = 11, num_sides=5, points = torch.tensor(np.column_stack((pts_x, pts_y)), dtype=torch.float64)).detach().cpu().numpy()
             u_h += lifting
         elif lifting_method == "lightning":
-            raise NotImplementedError("Lightning lifting method is not implemented yet.")
+            import lightning_laplace
+            sol = lightning_laplace.solve_case_11(tolerance = 1e-6)
+            lifting = sol(pts_x, pts_y)
+            u_h += lifting
         elif lifting_method == "none":
             pass  # No lifting applied
+        elif lifting_method == "wachspress":
+            lifting = ihbnd.get_lifting_polygon(model=model_ms,function_case = 11, num_sides=5, points = torch.tensor(np.column_stack((pts_x, pts_y)), dtype=torch.float64),
+                                              smoothness=1, blend_method="wachspress", eps=1e-12, return_laplacian=False)
+            lifting = lifting.detach().cpu().numpy()
+            u_h += lifting
+        elif lifting_method == "coons":
+            lifting = ihbnd.get_lifting_polygon(model=model_ms,function_case = 11, num_sides=5, points = torch.tensor(np.column_stack((pts_x, pts_y)), dtype=torch.float64),
+                                            smoothness=1, blend_method="coons", eps=1e-12, return_laplacian=False)
+            lifting = lifting.detach().cpu().numpy()
+            u_h += lifting
         else:
             raise ValueError(f"Unknown lifting method: {lifting_method}")
     else: print("AAAAAAA")

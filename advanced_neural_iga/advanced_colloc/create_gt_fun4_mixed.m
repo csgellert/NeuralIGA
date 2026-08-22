@@ -1,8 +1,8 @@
 %% Create PDE model for fun_num=4: Mixed Pentagon (3 curved + 2 straight sides)
 clear all
 close all
-
 % Parameters matching Python defaults
+%% 
 radius = 0.5;
 center = [0.0, 0.0];
 rotation = 0.0;
@@ -145,8 +145,13 @@ specifyCoefficients(model, ...
     'a', 0, ...
     'f', fFun);
 %% Prescribe inhomogenoous bc
+% Use radius^2 (not 1^2) so this vanishes exactly at the pentagon's own
+% vertices (which sit at |z|=radius, not |z|=1) -- otherwise it disagrees
+% with the straight sides' u=0 right at the shared corners, a discontinuity
+% a harmonic lifting function can't represent. Matches
+% PDE_testcases.dirichletBoundary_vectorized's FUNCTION_CASE==12 branch.
 fFun2 = @(location,state) ...
-    1^2-(location.x^2+location.y^2);
+    radius^2-(location.x^2+location.y^2);
 %% Apply boundary conditions
 % Dirichlet: u = 0 on straight sides and u = fFun2 on curved sides
 applyBoundaryCondition(model,...

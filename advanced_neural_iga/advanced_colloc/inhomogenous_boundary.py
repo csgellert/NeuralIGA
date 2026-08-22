@@ -1,6 +1,8 @@
 import collocation_WEB as cWEB
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.tri import Triangulation
+from contextlib import contextmanager
 from pathlib import Path
 import Geomertry
 import PDE_testcases
@@ -10,6 +12,31 @@ from typing import Any, Dict, Optional
 torch.set_default_dtype(torch.float64)
 
 model = netdefs.load_test_model("SIREN_pentagon_MMSDF", "SIREN", params={"architecture": [2, 256, 256, 256, 5], "w_0": 15, "w_hidden": 30.0})
+
+
+@contextmanager
+def _pinned_function_case(function_case):
+    """Pin PDE_testcases.FUNCTION_CASE to ``function_case`` for the duration of
+    the with-block, restoring it afterward.
+
+    Every PDE_testcases value function (dirichletBoundary_vectorized,
+    load_function_vectorized, dirichletBoundary_side_vectorized, ...) and the
+    case-11 disc clip in ``_DistanceCombinerBase.forward`` read the
+    module-global FUNCTION_CASE rather than taking it as an argument.
+    ``collocation_WEB.run_example`` only pins it for the duration of the
+    solve, then restores whatever it was *before* that call -- so a
+    reconstruction/plotting call made afterward (e.g. from a notebook cell)
+    is at the mercy of whatever case an earlier cell happened to leave
+    active. Without this, case 12 could silently get case 11's unit-disc
+    clip applied to its weight function (or vice versa) during
+    reconstruction, even though the solve itself was correct.
+    """
+    old_case = PDE_testcases.FUNCTION_CASE
+    PDE_testcases.FUNCTION_CASE = function_case
+    try:
+        yield
+    finally:
+        PDE_testcases.FUNCTION_CASE = old_case
 
 
 # =============================================================================
@@ -280,14 +307,10 @@ def _side_points_and_values(function_case, num_sides, points, distances=None):
     n_points = points.shape[0]
     pts_flat = side_points.reshape(-1, 2)
     side_idx_flat = torch.arange(num_sides, device=points.device).repeat(n_points)
-    old_case = PDE_testcases.FUNCTION_CASE
-    PDE_testcases.FUNCTION_CASE = function_case
-    try:
+    with _pinned_function_case(function_case):
         bnd_values = PDE_testcases.dirichletBoundary_side_vectorized(
             pts_flat[:, 0], pts_flat[:, 1], side_idx_flat,
         )
-    finally:
-        PDE_testcases.FUNCTION_CASE = old_case
     bnd_values = bnd_values.reshape(n_points, num_sides)
     return side_points, bnd_values, s_param
 
@@ -370,11 +393,19 @@ def _compute_lifting_core(
     blend_method="inverse_distance",
     eps=1e-12,
     return_laplacian=False,
+    track_grad=None,
 ):
-    if return_laplacian and not points.requires_grad:
+    """``track_grad`` defaults to ``return_laplacian`` (the value needs no
+    autograd graph unless the Laplacian is requested), but callers that need
+    a differentiable ``ud`` without the Laplacian (e.g. get_lifting_gradient)
+    can force it on explicitly.
+    """
+    if track_grad is None:
+        track_grad = return_laplacian
+    if track_grad and not points.requires_grad:
         points = points.detach().clone().requires_grad_(True)
 
-    d = _eval_side_distances(model, points, num_sides, track_grad=return_laplacian)
+    d = _eval_side_distances(model, points, num_sides, track_grad=track_grad)
     _, bnd_values, s_param = _side_points_and_values(function_case, num_sides, points, distances=d)
 
     ud, _ = _blend_lifting_values(
@@ -411,6 +442,23 @@ def get_lifting_polygon(model, function_case, num_sides, points, smoothness=2,
                                   blend_method=blend_method, eps=eps, return_laplacian=return_laplacian)
 
 
+def get_lifting_gradient(model, function_case, num_sides, points, smoothness=2,
+                          blend_method="inverse_distance", eps=1e-12):
+    """Lifting value together with its gradient (d/dx, d/dy), via autograd.
+
+    Returns
+    -------
+    ud : Tensor, shape (N,)
+    dud : Tensor, shape (N, 2)
+    """
+    if not points.requires_grad:
+        points = points.detach().clone().requires_grad_(True)
+    ud = _compute_lifting_core(model, function_case, num_sides, points, smoothness,
+                                blend_method=blend_method, eps=eps, return_laplacian=False, track_grad=True)
+    dud = torch.autograd.grad(outputs=ud.sum(), inputs=points, create_graph=False, retain_graph=False)[0]
+    return ud, dud
+
+
 # =============================================================================
 # PLOTTING / DIAGNOSTICS
 # =============================================================================
@@ -424,6 +472,7 @@ def plot_case_11_poisson_samples(
     filename: str = "poisson_samples_hom_1_e_3.csv",
     model_ms=None,
     lifting_method: str = "get_lifting",
+    function_case: int = 11,
 ):
     """Plot ground truth, reconstructed solution, and absolute error for case 11.
 
@@ -444,25 +493,17 @@ def plot_case_11_poisson_samples(
     pts_y = np.asarray(data["y"], dtype=np.float64).ravel()
     gt = np.asarray(data["u"], dtype=np.float64).ravel()
 
-    wfct_phys = cWEB.NeuralWeightFunction(model=model, domain=None)
-    pred = cWEB.reconstruct_collocation_at_points(pts_x, pts_y, recon_info, wfct_phys, model_ms=model_ms, lifting_method=lifting_method)
-    error = pred - gt
-
+    # model's forward (e.g. sharp_min_distance_function) reads the global
+    # FUNCTION_CASE for its case-11 disc clip, so it must be pinned here --
+    # see _pinned_function_case.
+    with _pinned_function_case(function_case):
+        wfct_phys = cWEB.NeuralWeightFunction(model=model, domain=None)
+        pred = cWEB.reconstruct_collocation_at_points(
+            pts_x, pts_y, recon_info, wfct_phys, model_ms=model_ms,
+            lifting_method=lifting_method, function_case=function_case,
+        )
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.8), constrained_layout=True)
-
-    plots = [
-        (gt, f"{title_prefix} ground truth", "viridis"),
-        (pred, f"{title_prefix} reconstructed solution", "viridis"),
-        (np.abs(error), f"{title_prefix} absolute error", "hot"),
-    ]
-
-    for ax, (values, title, cmap) in zip(axes, plots):
-        contour = ax.tricontourf(pts_x, pts_y, values, levels=50, cmap=cmap)
-        ax.set_aspect("equal", adjustable="box")
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_title(title)
-        fig.colorbar(contour, ax=ax, fraction=0.046, pad=0.04)
+    error = _plot_gt_pred_error_row(axes, pts_x, pts_y, gt, pred, title_prefix)
 
     if show:
         plt.show()
@@ -475,6 +516,235 @@ def plot_case_11_poisson_samples(
         "error": error,
         "csv_path": str(csv_file),
     }
+
+
+def _masked_triangulation(pts_x, pts_y, edge_factor=3.0):
+    """Delaunay triangulation of scattered points with long 'bridge' triangles masked out.
+
+    Plain Delaunay triangulation always fills the *convex hull* of its
+    points. For a non-convex domain -- e.g. case 12's mixed pentagon, which
+    bulges *inward* on 3 sides -- that silently paints over the concave
+    notches with extra triangles bridging across them, making tricontourf
+    render what looks like a plain convex (straight-sided) pentagon instead
+    of the true curved-side shape. Masking out triangles whose longest edge
+    is much longer than typical (a standard alpha-shape-style heuristic)
+    removes those bridging triangles without needing to know the domain's
+    exact boundary.
+    """
+    tri = Triangulation(pts_x, pts_y)
+    tx = pts_x[tri.triangles]
+    ty = pts_y[tri.triangles]
+    edge01 = np.hypot(tx[:, 0] - tx[:, 1], ty[:, 0] - ty[:, 1])
+    edge12 = np.hypot(tx[:, 1] - tx[:, 2], ty[:, 1] - ty[:, 2])
+    edge20 = np.hypot(tx[:, 2] - tx[:, 0], ty[:, 2] - ty[:, 0])
+    max_edge = np.maximum(np.maximum(edge01, edge12), edge20)
+    tri.set_mask(max_edge > edge_factor * np.median(max_edge))
+    return tri
+
+
+def _plot_gt_pred_error_row(axes_row, pts_x, pts_y, gt, pred, label, cmap_val="viridis", cmap_err="hot"):
+    """Render one row of 3 panels (ground truth, reconstructed, absolute error)."""
+    error = pred - gt
+    triangulation = _masked_triangulation(pts_x, pts_y)
+    panels = [
+        (gt, f"{label} ground truth", cmap_val),
+        (pred, f"{label} reconstructed", cmap_val),
+        (np.abs(error), f"{label} absolute error", cmap_err),
+    ]
+    for ax, (values, title, cmap) in zip(axes_row, panels):
+        contour = ax.tricontourf(triangulation, values, levels=50, cmap=cmap)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_title(title)
+        ax.figure.colorbar(contour, ax=ax, fraction=0.046, pad=0.04)
+    return error
+
+
+def _lifting_method_to_blend(lifting_method):
+    """Map a reconstruct_collocation_at_points-style ``lifting_method`` name to
+    the ``blend_method`` understood by get_lifting_gradient/get_lifting_polygon."""
+    if lifting_method == "get_lifting":
+        return "inverse_distance"
+    if lifting_method in ("wachspress", "coons"):
+        return lifting_method
+    raise ValueError(
+        f"Gradient/Laplacian reconstruction does not support lifting_method='{lifting_method}'. "
+        "Use 'get_lifting', 'wachspress', 'coons', or 'none'."
+    )
+
+
+def _reconstruct_gradient_and_laplacian(
+    pts_x, pts_y, recon_info, wfct_phys, model_ms, lifting_method, function_case, num_sides=5,
+):
+    """Reconstruct the gradient magnitude and Laplacian of the full collocation
+    solution u = max(w, 0) * v + lifting at arbitrary physical points.
+
+    The homogeneous WEB-spline part w*v is differentiated analytically via
+    ``collocation_WEB.reconstruct_collocation_hessian_diag``. The lifting
+    function's own contribution is also differentiated analytically, not
+    numerically:
+    - ``lifting_method="lightning"``: the lightning solution is (the real
+      part of) an explicit holomorphic function built from elementary
+      polynomial/Arnoldi and rational-pole terms, each of which has a known
+      closed-form derivative -- see
+      ``LightningLaplaceSolution._evaluate_complex_and_derivative`` and
+      ``.evaluate_gradient``. Its Laplacian is exactly zero: a harmonic
+      function's real part solves Delta(u)=0 by construction, independent of
+      the boundary least-squares fit residual, so there is nothing to add
+      for the Laplacian in this branch.
+    - otherwise: autograd (get_lifting_gradient / get_lifting_polygon),
+      using the same blend method the value reconstruction used, so the two
+      stay consistent.
+    """
+    pts_x = np.asarray(pts_x, dtype=cWEB.NP_DTYPE).ravel()
+    pts_y = np.asarray(pts_y, dtype=cWEB.NP_DTYPE).ravel()
+
+    _, ux, uy, uxx, uyy = cWEB.reconstruct_collocation_hessian_diag(pts_x, pts_y, recon_info, wfct_phys)
+    laplacian = uxx + uyy
+
+    if lifting_method == "lightning":
+        import lightning_laplace
+        if function_case not in (11, 12):
+            raise ValueError(
+                "lifting_method='lightning' gradient/Laplacian reconstruction only "
+                "supports function_case 11 or 12."
+            )
+        sol = lightning_laplace.solve_case_11(tolerance=1e-6) if function_case == 11 \
+            else lightning_laplace.solve_case_12(tolerance=1e-6)
+        _, lift_ux, lift_uy = sol.evaluate_gradient(pts_x, pts_y)
+        ux = ux + lift_ux
+        uy = uy + lift_uy
+        # Delta(lifting) == 0 exactly (see docstring) -- laplacian unchanged.
+    elif model_ms is not None and lifting_method != "none":
+        blend_method = _lifting_method_to_blend(lifting_method)
+        lift_points = torch.tensor(np.column_stack((pts_x, pts_y)), dtype=torch.float64)
+        _, dud = get_lifting_gradient(model_ms, function_case, num_sides, lift_points.clone(), blend_method=blend_method)
+        _, lap_ud = get_lifting_polygon(model_ms, function_case, num_sides, lift_points.clone(),
+                                         blend_method=blend_method, return_laplacian=True)
+        ux = ux + dud[:, 0].detach().cpu().numpy()
+        uy = uy + dud[:, 1].detach().cpu().numpy()
+        laplacian = laplacian + lap_ud.detach().cpu().numpy()
+
+    grad_mag = np.sqrt(ux ** 2 + uy ** 2)
+    return grad_mag, laplacian
+
+
+def plot_case_12_poisson_samples(
+    recon_info,
+    model,
+    csv_path=None,
+    title_prefix="Function case 12",
+    show: bool = True,
+    filename: str = "poisson_samples_fun4_mixed_pentagon.csv",
+    model_ms=None,
+    lifting_method: str = "get_lifting",
+    plot_gradient: bool = False,
+    gradient_csv_path=None,
+    gradient_filename: str = "poisson_samples_fun4_mixed_pentagon_gradient.csv",
+    plot_laplacian: bool = False,
+    function_case: int = 12,
+    num_sides: int = 5,
+):
+    """Plot ground truth, reconstructed solution, and absolute error for case 12
+    (mixed pentagon), like ``plot_case_11_poisson_samples``, plus two optional
+    extra rows:
+
+    - ``plot_gradient``: gradient-magnitude ground truth (read from
+      ``gradient_csv_path``/``gradient_filename``, columns x,y,gradient_magnitude),
+      reconstructed gradient magnitude, and their absolute error.
+    - ``plot_laplacian``: reconstructed Laplacian of the solution against the
+      analytic target ``-PDE_testcases.load_function_vectorized(x, y)`` for
+      ``function_case`` (the PDE is -Delta(u) = f, so Delta(u) = -f), and their
+      absolute error. There is no ground-truth file for this -- it is derived
+      from the PDE's own right-hand side.
+
+    When either extra row is plotted, its mean and max absolute error are also
+    printed.
+
+    The value CSV must contain columns x,y,u; the gradient CSV, x,y,gradient_magnitude.
+    Both reconstructions use ``recon_info`` from
+    ``collocation_WEB.run_example(..., return_coefficients=True)``.
+    """
+    if recon_info is None:
+        raise ValueError("recon_info is required. Call collocation_WEB.run_example(..., return_coefficients=True).")
+
+    csv_file = Path(csv_path) if csv_path is not None else Path(__file__).with_name(filename)
+    data = np.genfromtxt(csv_file, delimiter=",", names=True)
+    if data.size == 0:
+        raise ValueError(f"No samples found in {csv_file}")
+
+    pts_x = np.asarray(data["x"], dtype=np.float64).ravel()
+    pts_y = np.asarray(data["y"], dtype=np.float64).ravel()
+    gt = np.asarray(data["u"], dtype=np.float64).ravel()
+
+    n_rows = 1 + int(plot_gradient) + int(plot_laplacian)
+    fig, axes = plt.subplots(n_rows, 3, figsize=(15, 4.8 * n_rows), constrained_layout=True)
+    axes = np.atleast_2d(axes)
+
+    result = {"x": pts_x, "y": pts_y, "gt": gt, "csv_path": str(csv_file)}
+
+    # model's forward (e.g. sharp_min_distance_function) and PDE_testcases's
+    # value functions all read the global FUNCTION_CASE, so everything that
+    # touches the model or PDE_testcases is pinned to `function_case` here --
+    # see _pinned_function_case.
+    with _pinned_function_case(function_case):
+        wfct_phys = cWEB.NeuralWeightFunction(model=model, domain=None)
+        pred = cWEB.reconstruct_collocation_at_points(
+            pts_x, pts_y, recon_info, wfct_phys, model_ms=model_ms,
+            lifting_method=lifting_method, function_case=function_case,
+        )
+        error = _plot_gt_pred_error_row(axes[0], pts_x, pts_y, gt, pred, title_prefix)
+        result["pred"] = pred
+        result["error"] = error
+
+        row = 1
+        if plot_gradient:
+            grad_csv_file = Path(gradient_csv_path) if gradient_csv_path is not None else Path(__file__).with_name(gradient_filename)
+            grad_data = np.genfromtxt(grad_csv_file, delimiter=",", names=True)
+            if grad_data.size == 0:
+                raise ValueError(f"No samples found in {grad_csv_file}")
+
+            grad_pts_x = np.asarray(grad_data["x"], dtype=np.float64).ravel()
+            grad_pts_y = np.asarray(grad_data["y"], dtype=np.float64).ravel()
+            grad_gt = np.asarray(grad_data["gradient_magnitude"], dtype=np.float64).ravel()
+
+            grad_pred, _ = _reconstruct_gradient_and_laplacian(
+                grad_pts_x, grad_pts_y, recon_info, wfct_phys, model_ms, lifting_method, function_case, num_sides,
+            )
+            grad_error = _plot_gt_pred_error_row(
+                axes[row], grad_pts_x, grad_pts_y, grad_gt, grad_pred, f"{title_prefix} |grad u|",
+            )
+            print(f"Gradient magnitude: mean abs error = {np.mean(np.abs(grad_error)):.6e}, "
+                  f"max abs error = {np.max(np.abs(grad_error)):.6e}")
+
+            result.update({
+                "grad_x": grad_pts_x, "grad_y": grad_pts_y,
+                "grad_gt": grad_gt, "grad_pred": grad_pred, "grad_error": grad_error,
+                "gradient_csv_path": str(grad_csv_file),
+            })
+            row += 1
+
+        if plot_laplacian:
+            _, lap_pred = _reconstruct_gradient_and_laplacian(
+                pts_x, pts_y, recon_info, wfct_phys, model_ms, lifting_method, function_case, num_sides,
+            )
+            lap_target = -PDE_testcases.load_function_vectorized(pts_x, pts_y)
+
+            lap_error = _plot_gt_pred_error_row(
+                axes[row], pts_x, pts_y, lap_target, lap_pred, f"{title_prefix} Delta(u)",
+            )
+            print(f"Laplacian: mean abs error = {np.mean(np.abs(lap_error)):.6e}, "
+                  f"max abs error = {np.max(np.abs(lap_error)):.6e}")
+
+            result.update({
+                "laplacian_target": lap_target, "laplacian_pred": lap_pred, "laplacian_error": lap_error,
+            })
+
+    if show:
+        plt.show()
+
+    return result
 
 
 def plot_lifting_function(

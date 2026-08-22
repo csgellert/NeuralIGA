@@ -65,6 +65,61 @@ class LightningLaplaceSolution:
         values = values[1:] - 1j * values[0].imag
         return values.reshape(np.asarray(z).shape)
 
+    def _evaluate_complex_and_derivative(self, z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Return (f(z), f'(z)) for the underlying holomorphic function f, with
+        u(x,y) = Re(f(z)) the harmonic solution.
+
+        Every basis piece here (polynomial/Vandermonde, Arnoldi, and pole
+        terms) is an explicit, elementary function of z, so f' is built
+        analytically term by term -- no finite differences or autograd
+        needed. The Arnoldi basis is defined by a linear recurrence in z, so
+        its derivative satisfies the same recurrence differentiated by the
+        product rule, carried alongside the values themselves.
+        """
+        flat = np.asarray(z, dtype=np.complex128).ravel()
+        zz = np.concatenate(([self.center], flat))
+
+        if self.arnoldi_hessenberg is None:
+            zc = (zz - self.center) / self.scale
+            powers = np.arange(self.degree + 1)
+            q = zc[:, None] ** powers
+            dq = np.zeros_like(q)
+            if self.degree >= 1:
+                dq[:, 1:] = (powers[None, 1:] * zc[:, None] ** (powers[None, 1:] - 1)) / self.scale
+        else:
+            hessenberg = self.arnoldi_hessenberg
+            q_columns = [np.ones(zz.size, dtype=np.complex128)]
+            dq_columns = [np.zeros(zz.size, dtype=np.complex128)]
+            for column in range(self.degree):
+                value = (zz - self.center) * q_columns[column]
+                dvalue = q_columns[column] + (zz - self.center) * dq_columns[column]
+                for previous in range(column + 1):
+                    value -= hessenberg[previous, column] * q_columns[previous]
+                    dvalue -= hessenberg[previous, column] * dq_columns[previous]
+                denominator = hessenberg[column + 1, column]
+                q_columns.append(value / denominator)
+                dq_columns.append(dvalue / denominator)
+            q = np.column_stack(q_columns)
+            dq = np.column_stack(dq_columns)
+
+        basis = q
+        dbasis = dq
+        if self.poles.size:
+            diff = zz[:, None] - self.poles[None, :]
+            basis = np.column_stack((basis, self.pole_scales[None, :] / diff))
+            dbasis = np.column_stack((dbasis, -self.pole_scales[None, :] / diff**2))
+
+        coefficients = np.concatenate((self.polynomial_coefficients, self.pole_coefficients))
+        values = basis @ coefficients
+        derivative = dbasis @ coefficients
+
+        # The branch-fixing shift subtracted from `values` is a real constant
+        # (independent of z), so it has zero derivative and is omitted here.
+        values = values[1:] - 1j * values[0].imag
+        derivative = derivative[1:]
+        shape = np.asarray(z).shape
+        return values.reshape(shape), derivative.reshape(shape)
+
     def evaluate(self, x: ArrayLike, y: Optional[ArrayLike] = None) -> np.ndarray:
         """Evaluate the real harmonic solution at complex or Cartesian points."""
         if y is None:
@@ -74,16 +129,51 @@ class LightningLaplaceSolution:
             z = x_arr + 1j * y_arr
         return np.real(self._evaluate_complex(z))
 
+    def evaluate_gradient(
+        self, x: ArrayLike, y: Optional[ArrayLike] = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return (u, du/dx, du/dy) for the real harmonic solution.
+
+        Exact via the Cauchy-Riemann equations: for holomorphic f = u + iv,
+        f'(z) = du/dx + i*dv/dx = du/dx - i*du/dy, so du/dx = Re(f') and
+        du/dy = -Im(f'). No finite differences are used.
+        """
+        if y is None:
+            z = np.asarray(x, dtype=np.complex128)
+        else:
+            x_arr, y_arr = np.broadcast_arrays(np.asarray(x, dtype=float), np.asarray(y, dtype=float))
+            z = x_arr + 1j * y_arr
+        f, fprime = self._evaluate_complex_and_derivative(z)
+        return np.real(f), np.real(fprime), -np.imag(fprime)
+
+    def laplacian(self, x: ArrayLike, y: Optional[ArrayLike] = None) -> np.ndarray:
+        """Laplacian of the harmonic solution.
+
+        Identically zero: u = Re(f) for holomorphic f solves Delta(u) = 0
+        exactly by construction (real/imaginary parts of a holomorphic
+        function are harmonic), independent of the least-squares fit
+        residual at the boundary.
+        """
+        shape = np.broadcast_shapes(np.shape(x), np.shape(y) if y is not None else ())
+        return np.zeros(shape, dtype=float)
+
     def __call__(self, x: ArrayLike, y: Optional[ArrayLike] = None) -> np.ndarray:
         return self.evaluate(x, y)
 
 
-def _as_ccw_vertices(vertices: np.ndarray) -> np.ndarray:
+def _as_ccw_vertices(vertices: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Return (vertices, was_reversed) with vertices in CCW order.
+
+    ``was_reversed`` lets callers keep any per-vertex side array (e.g. a
+    corner mask) consistent with the possibly-flipped vertex order.
+    """
     values = np.asarray(vertices, dtype=float)
     if values.ndim != 2 or values.shape[1] != 2 or values.shape[0] < 3:
         raise ValueError("vertices must have shape (number_of_vertices, 2)")
     area2 = np.sum(values[:, 0] * np.roll(values[:, 1], -1) - values[:, 1] * np.roll(values[:, 0], -1))
-    return values if area2 >= 0 else values[::-1].copy()
+    if area2 >= 0:
+        return values, False
+    return values[::-1].copy(), True
 
 
 def _polygon_geometry(vertices: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, complex]:
@@ -101,11 +191,27 @@ def _polygon_geometry(vertices: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.
     return real_vertices, lengths, outward, scale, center
 
 
-def _inside_convex_polygon(points: np.ndarray, vertices: np.ndarray) -> np.ndarray:
-    edges = np.roll(vertices, -1, axis=0) - vertices
-    relative = points[:, None, :] - vertices[None, :, :]
-    cross = edges[None, :, 0] * relative[:, :, 1] - edges[None, :, 1] * relative[:, :, 0]
-    return np.all(cross >= -1e-13, axis=1)
+def _inside_polygon(points: np.ndarray, vertices: np.ndarray) -> np.ndarray:
+    """Point-in-polygon test valid for convex *or* concave simple polygons
+    (even-odd ray-casting rule), vectorized over ``points``.
+
+    The pole-placement loop below only wants to know which candidate pole
+    positions fall outside the polygon; a half-plane-intersection test would
+    silently be wrong here for a non-convex polygon (e.g. case 12's mixed
+    pentagon, which bulges inward on 3 sides) -- it would place poles
+    *inside* the domain, causing the solution to blow up near them.
+    """
+    x = points[:, 0]
+    y = points[:, 1]
+    xi = vertices[:, 0]
+    yi = vertices[:, 1]
+    xj = np.roll(xi, -1)
+    yj = np.roll(yi, -1)
+    eps = 1e-14
+    crosses = ((yi[None, :] > y[:, None]) != (yj[None, :] > y[:, None])) & (
+        x[:, None] < (xj[None, :] - xi[None, :]) * (y[:, None] - yi[None, :]) / (yj[None, :] - yi[None, :] + eps) + xi[None, :]
+    )
+    return (np.count_nonzero(crosses, axis=1) % 2) == 1
 
 
 def _boundary_samples(
@@ -194,6 +300,7 @@ def solve_laplace(
     use_arnoldi: bool = True,
     relative_corner_weight: bool = False,
     minimum_samples_per_side: int = 30,
+    corner_mask: Optional[np.ndarray] = None,
 ) -> LightningLaplaceSolution:
     """Solve ``Delta u = 0`` with Dirichlet data on a polygon.
 
@@ -202,13 +309,30 @@ def solve_laplace(
     may be one global function receiving vectorized ``(x, y)`` arrays, or a
     sequence with one scalar/function per side, matching MATLAB's ``g{k}``.
     Per-side functions also receive vectorized ``(x, y)`` arrays.
+
+    ``corner_mask`` is an optional boolean array, one entry per vertex,
+    marking which vertices are genuine corners eligible for pole placement
+    (True) versus smooth points introduced only to approximate a curved
+    boundary segment with straight lines (False, default True everywhere if
+    omitted). The lightning method's poles exist to resolve the singular
+    boundary-derivative behavior at real corners; placing them at a smooth
+    point on a fine polyline approximation of a curve serves no purpose and
+    can exhaust the solver's pole/matrix-size budget before it converges.
+    Points marked False rely solely on the growing polynomial/Arnoldi basis
+    to fit the (smooth) boundary data there.
     """
     if tolerance <= 0:
         raise ValueError("tolerance must be positive")
     if max_iterations < 1 or max_poles_per_corner < 1:
         raise ValueError("max_iterations and max_poles_per_corner must be positive")
 
-    polygon = _as_ccw_vertices(vertices)
+    polygon, was_reversed = _as_ccw_vertices(vertices)
+    if corner_mask is not None:
+        corner_mask = np.asarray(corner_mask, dtype=bool)
+        if corner_mask.shape[0] != polygon.shape[0]:
+            raise ValueError("corner_mask must have one entry per polygon vertex")
+        if was_reversed:
+            corner_mask = corner_mask[::-1].copy()
     corner_z, side_lengths, outward, scale, center = _polygon_geometry(polygon)
     pole_counts = np.zeros(polygon.shape[0], dtype=int)
     best = None
@@ -221,7 +345,7 @@ def solve_laplace(
             distances = scale * np.exp(4.0 * (np.sqrt(np.arange(1, count + 1)) - np.sqrt(count)))
             distances = distances[distances > 1e-15 * scale]
             candidate = corner + direction * distances
-            keep = ~_inside_convex_polygon(np.column_stack((candidate.real, candidate.imag)), polygon)
+            keep = ~_inside_polygon(np.column_stack((candidate.real, candidate.imag)), polygon)
             poles.extend(candidate[keep])
             pole_scales.extend(distances[keep])
 
@@ -265,6 +389,8 @@ def solve_laplace(
         if error < 0.5 * tolerance:
             break
         for side, side_error in enumerate(corner_errors):
+            if corner_mask is not None and not corner_mask[side]:
+                continue  # smooth boundary point: no pole singularity to resolve
             if side_error > 0.5 * error and pole_counts[side] < max_poles_per_corner:
                 pole_counts[side] += int(np.ceil(1.0 + np.sqrt(pole_counts[side])))
             else:
@@ -300,19 +426,140 @@ def solve_laplace(
     )
 
 
-def solve_case_11(**solver_options) -> LightningLaplaceSolution:
-    """Solve the harmonic lifting problem for ``PDE_testcases.FUNCTION_CASE == 11``."""
+_SOLUTION_CACHE: dict = {}
+
+
+def clear_solution_cache() -> None:
+    """Drop all cached solve_case_11/solve_case_12 solutions.
+
+    Call this if PDE_testcases.CASE_POLYGON_GEOMETRY is changed at runtime
+    (e.g. interactively in a notebook) and a fresh solve is needed.
+    """
+    _SOLUTION_CACHE.clear()
+
+
+def solve_case_11(*, use_cache: bool = True, **solver_options) -> LightningLaplaceSolution:
+    """Solve the harmonic lifting problem for ``PDE_testcases.FUNCTION_CASE == 11``.
+
+    Cached by default (keyed on ``solver_options``): reconstructing the
+    gradient and Laplacian of this lifting
+    (``inhomogenous_boundary._reconstruct_gradient_and_laplacian``)
+    re-evaluates the same solution used for the plain value, so caching
+    avoids repeating the iterative least-squares solve for every one of
+    those calls. Pass ``use_cache=False`` to force a fresh solve.
+    """
     from Geomertry import regular_polygon_vertices_np
     import PDE_testcases
 
     if PDE_testcases.FUNCTION_CASE != 11:
         raise ValueError("solve_case_11 requires PDE_testcases.FUNCTION_CASE == 11")
+
+    key = ("case11", tuple(sorted(solver_options.items())))
+    if use_cache and key in _SOLUTION_CACHE:
+        return _SOLUTION_CACHE[key]
+
     side_data = [
         lambda x, y: 0 * x,
         lambda x, y: 1 - (x**2 + y**2),
         lambda x, y: 1 - x**2 - y**2,
         lambda x, y: 1 - (x**2 + y**2),
-        lambda x, y: 0 * x 
+        lambda x, y: 0 * x
     ]
     vertices = regular_polygon_vertices_np(n_sides=5, radius=1.0, center=(0.0, 0.0))
-    return solve_laplace(vertices, side_data, **solver_options)
+    solution = solve_laplace(vertices, side_data, **solver_options)
+    if use_cache:
+        _SOLUTION_CACHE[key] = solution
+    return solution
+
+
+def solve_case_12(samples_per_side: int = 64, *, use_cache: bool = True, **solver_options) -> LightningLaplaceSolution:
+    """Solve the harmonic lifting problem for ``PDE_testcases.FUNCTION_CASE == 12``
+    (the mixed pentagon: 3 curved sides, 2 straight sides).
+
+    The lightning method needs a polygon with straight edges, so each curved
+    side is approximated by a fine polyline of ``samples_per_side`` straight
+    segments sampled along the exact cubic Bezier-equivalent curve used in
+    ``inhomogenous_boundary._build_polygon_boundary_data``; straight sides
+    stay a single segment. Geometry comes from
+    ``PDE_testcases.CASE_POLYGON_GEOMETRY[12]``, so it always matches the
+    domain used elsewhere for case 12.
+
+    Boundary data follows ``create_gt_fun4_mixed.m``: u = 0 on the straight
+    sides, u = radius^2 - (x^2 + y^2) on the curved sides (matching
+    ``PDE_testcases.dirichletBoundary_vectorized``'s FUNCTION_CASE==12
+    branch, which uses radius^2 rather than 1^2 so this vanishes exactly at
+    the pentagon's own vertices).
+
+    Cached by default, like ``solve_case_11`` -- see its docstring. Pass
+    ``use_cache=False`` to force a fresh solve.
+    """
+    import PDE_testcases
+
+    if PDE_testcases.FUNCTION_CASE != 12:
+        raise ValueError("solve_case_12 requires PDE_testcases.FUNCTION_CASE == 12")
+    if samples_per_side < 1:
+        raise ValueError("samples_per_side must be positive")
+
+    params = PDE_testcases.get_case_polygon_geometry(12)
+    radius = float(params["radius"])
+    center = params["center"]
+    rotation = float(params["rotation"])
+    bulge = float(params["bulge"])
+    curved_side_indices = set(int(i) for i in params["curved_side_indices"])
+
+    key = (
+        "case12", samples_per_side, radius, tuple(center), rotation, bulge,
+        tuple(sorted(curved_side_indices)), tuple(sorted(solver_options.items())),
+    )
+    if use_cache and key in _SOLUTION_CACHE:
+        return _SOLUTION_CACHE[key]
+
+    n_sides = 5
+    angles = rotation + (2.0 * np.pi / n_sides) * np.arange(n_sides, dtype=float)
+    corners = np.column_stack([
+        center[0] + radius * np.cos(angles),
+        center[1] + radius * np.sin(angles),
+    ])
+
+    zero_fn = lambda x, y: 0.0 * x
+    # radius**2, not 1**2: this must vanish at the pentagon's own vertices
+    # (|z|=radius), matching PDE_testcases.dirichletBoundary_vectorized's
+    # FUNCTION_CASE==12 branch -- see solve_case_12's docstring.
+    circle_fn = lambda x, y: radius**2 - (x**2 + y**2)
+
+    fine_vertices = []
+    side_data: list = []
+    corner_mask: list = []
+    for side_idx in range(n_sides):
+        v0, v1 = corners[side_idx], corners[(side_idx + 1) % n_sides]
+
+        if side_idx in curved_side_indices:
+            # Same cubic Bezier-equivalent span as
+            # inhomogenous_boundary._build_polygon_boundary_data: an inward
+            # bulge of `bulge * edge_len` at the two interior control points.
+            edge = v1 - v0
+            edge_len = float(np.linalg.norm(edge))
+            n_in = np.array([-edge[1], edge[0]]) / edge_len
+            curv = bulge * edge_len
+            p1 = (2.0 / 3.0) * v0 + (1.0 / 3.0) * v1 + curv * n_in
+            p2 = (1.0 / 3.0) * v0 + (2.0 / 3.0) * v1 + curv * n_in
+
+            t = np.linspace(0.0, 1.0, samples_per_side, endpoint=False)[:, None]
+            u = 1.0 - t
+            points = (u**3) * v0 + (3 * u**2 * t) * p1 + (3 * u * t**2) * p2 + (t**3) * v1
+            fine_vertices.append(points)
+            side_data.extend([circle_fn] * samples_per_side)
+            # Only the first point (t=0) is a real pentagon corner; the rest
+            # are smooth interior points of the curve, not corners (see
+            # solve_laplace's corner_mask).
+            corner_mask.extend([True] + [False] * (samples_per_side - 1))
+        else:
+            fine_vertices.append(v0[None, :])
+            side_data.append(zero_fn)
+            corner_mask.append(True)
+
+    vertices = np.vstack(fine_vertices)
+    solution = solve_laplace(vertices, side_data, corner_mask=np.array(corner_mask, dtype=bool), **solver_options)
+    if use_cache:
+        _SOLUTION_CACHE[key] = solution
+    return solution

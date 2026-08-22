@@ -56,7 +56,7 @@ CASE_POLYGON_GEOMETRY = {
 # data without touching inhomogenous_boundary.py.
 CASE_SIDE_ZERO_DIRICHLET = {
     11: (0, 4),
-    12: (1, 3),
+    12: (1, 2),
 }
 
 
@@ -284,7 +284,16 @@ def dirichletBoundary_vectorized(x, y):
     elif FUNCTION_CASE == 11:
         return 1**2 - (x**2 + y**2)
     elif FUNCTION_CASE == 12:
-        return 1**2 - (x**2 + y**2)
+        # Case 11's vertices sit on the unit circle, so its formula (radius=1)
+        # already vanishes there for free. Case 12's pentagon has a different
+        # circumradius (CASE_POLYGON_GEOMETRY[12]["radius"]), so the formula
+        # must use that same radius to vanish at its vertices too -- otherwise
+        # the curved sides' u = radius^2-(x^2+y^2) would disagree with the
+        # straight sides' u = 0 right at the shared corners (a genuine jump
+        # discontinuity in the Dirichlet data, which a harmonic lifting
+        # function cannot represent).
+        case12_radius = CASE_POLYGON_GEOMETRY[12]["radius"]
+        return case12_radius**2 - (x**2 + y**2)
     else:
         raise NotImplementedError
 

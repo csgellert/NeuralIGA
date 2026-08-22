@@ -151,6 +151,7 @@ def _build_mixed_pentagon_bspline_cache(
 	t_vals = np.linspace(0.0, 1.0, int(samples_per_side) + 1, dtype=np.float64)
 	curved_set = set(curved_side_indices)
 	side_polylines = []
+	side_control_points = []
 	for i in range(n_sides):
 		v0 = vertices[i]
 		v1 = vertices[(i + 1) % n_sides]
@@ -169,8 +170,10 @@ def _build_mixed_pentagon_bspline_cache(
 			p2 = (1.0 / 3.0) * v0 + (2.0 / 3.0) * v1 + curv * n_in
 			p3 = v1
 			side_curve = _cubic_bezier_eval(p0, p1, p2, p3, t_vals)
+			side_control_points.append(np.vstack([p0, p1, p2, p3]))
 		else:
 			side_curve = v0[None, :] + t_vals[:, None] * edge[None, :]
+			side_control_points.append(np.vstack([v0, v1]))
 
 		side_polylines.append(side_curve)
 
@@ -184,6 +187,7 @@ def _build_mixed_pentagon_bspline_cache(
 	cache = {
 		"n_sides": n_sides,
 		"side_polylines": side_polylines,
+		"side_control_points": side_control_points,
 		"boundary_polyline": boundary_polyline,
 		"bbox": (x_min, x_max, y_min, y_max),
 		"curved_side_indices": curved_side_indices,
@@ -222,6 +226,73 @@ def _point_to_polyline_distance_torch(points, polyline_t):
 	closest = start[None, :, :] + t[:, :, None] * edges[None, :, :]
 	d = torch.linalg.norm(points[:, None, :] - closest, dim=2)
 	return torch.min(d, dim=1).values
+
+
+def _point_to_polyline_distance_and_param_torch(points, polyline_t):
+	"""Like ``_point_to_polyline_distance_torch``, but also returns a coarse
+	curve parameter (segment index normalized to [0, 1]) for the winning
+	segment -- used as the initial guess for Newton refinement onto the true
+	analytic curve (see ``_refine_closest_point_on_cubic_torch``).
+	"""
+	n_segments = polyline_t.shape[0] - 1
+	start = polyline_t[:-1]
+	end = polyline_t[1:]
+	edges = end - start
+	edge_len_sq = torch.einsum("ni,ni->n", edges, edges)
+	edge_len_sq = torch.clamp(edge_len_sq, min=1e-14)
+
+	deltas = points[:, None, :] - start[None, :, :]
+	t_local = torch.einsum("pni,ni->pn", deltas, edges) / edge_len_sq[None, :]
+	t_local = torch.clamp(t_local, 0.0, 1.0)
+	closest = start[None, :, :] + t_local[:, :, None] * edges[None, :, :]
+	d = torch.linalg.norm(points[:, None, :] - closest, dim=2)
+	best = torch.min(d, dim=1)
+	idx = best.indices
+	t_param = (idx.to(points.dtype) + t_local.gather(1, idx[:, None]).squeeze(1)) / n_segments
+	return best.values, t_param
+
+
+def _refine_closest_point_on_cubic_torch(points, p0, p1, p2, p3, t_init, n_iters=4, eps=1e-14):
+	"""Refine an initial curve-parameter guess to the true closest point on a
+	cubic Bezier span via Newton iteration on d/dt|P - B(t)|^2 = 0.
+
+	A discrete polyline approximation of a smooth curve has a distance field
+	whose gradient (and especially its second derivative) is discontinuous
+	at every polyline joint, because the nearest-segment argmin flips there.
+	For a differentiable weight function this shows up as large, effectively
+	random spikes in the Laplacian near the boundary -- exactly where the
+	WEB-spline collocation matrix needs it to be smooth. Newton refinement
+	(unrolled a fixed number of steps, so it stays autograd-differentiable)
+	converges quadratically from the polyline's nearest-sample guess to the
+	true closest point on the analytic curve, which varies smoothly with the
+	query point almost everywhere, removing the artifact at its source
+	rather than papering over it.
+
+	Returns
+	-------
+	distance : Tensor (P,)
+	"""
+	t = t_init.clamp(0.0, 1.0)
+	for _ in range(n_iters):
+		u = 1.0 - t
+		u2, t2 = u * u, t * t
+		B = (u2 * u)[:, None] * p0[None, :] + (3 * u2 * t)[:, None] * p1[None, :] \
+			+ (3 * u * t2)[:, None] * p2[None, :] + (t2 * t)[:, None] * p3[None, :]
+		Bp = (3 * u2)[:, None] * (p1 - p0)[None, :] + (6 * u * t)[:, None] * (p2 - p1)[None, :] \
+			+ (3 * t2)[:, None] * (p3 - p2)[None, :]
+		Bpp = (6 * u)[:, None] * (p2 - 2 * p1 + p0)[None, :] + (6 * t)[:, None] * (p3 - 2 * p2 + p1)[None, :]
+
+		r = B - points
+		g_prime = 2.0 * torch.sum(r * Bp, dim=1)
+		g_double_prime = 2.0 * torch.sum(Bp * Bp, dim=1) + 2.0 * torch.sum(r * Bpp, dim=1)
+		step = g_prime / torch.where(g_double_prime.abs() > eps, g_double_prime, torch.full_like(g_double_prime, eps))
+		t = torch.clamp(t - step, 0.0, 1.0)
+
+	u = 1.0 - t
+	u2, t2 = u * u, t * t
+	B_final = (u2 * u)[:, None] * p0[None, :] + (3 * u2 * t)[:, None] * p1[None, :] \
+		+ (3 * u * t2)[:, None] * p2[None, :] + (t2 * t)[:, None] * p3[None, :]
+	return torch.linalg.norm(points - B_final, dim=1)
 
 
 def _points_in_polygon_numpy(points, polygon):
@@ -473,6 +544,8 @@ def mixed_pentagon_bspline_side_distances(
 		curved_side_indices=curved_side_indices,
 	)
 	side_polylines = cache["side_polylines"]
+	side_control_points = cache["side_control_points"]
+	curved_set = set(cache["curved_side_indices"])
 
 	if torch.is_tensor(x) or torch.is_tensor(y):
 		device = x.device if torch.is_tensor(x) else y.device
@@ -488,9 +561,23 @@ def mixed_pentagon_bspline_side_distances(
 		scalar_input = x_arr.ndim == 0
 		pts = torch.stack((x_arr.reshape(-1), y_arr.reshape(-1)), dim=1)
 		dists = []
-		for poly in side_polylines:
+		for side_idx, poly in enumerate(side_polylines):
 			poly_t = torch.as_tensor(poly, device=device, dtype=dtype)
-			dists.append(_point_to_polyline_distance_torch(pts, poly_t))
+			if side_idx in curved_set:
+				# The polyline is only a piecewise-linear *approximation* of this
+				# side's true cubic curve: its distance field has a kinked
+				# gradient at every segment joint (the nearest-segment argmin
+				# flips there), which shows up as large, essentially random
+				# spikes in the second derivative near the boundary -- exactly
+				# what a WEB-spline weight function's Laplacian must not have.
+				# Use the polyline only for a robust initial guess, then Newton
+				# -refine onto the true smooth curve (see
+				# _refine_closest_point_on_cubic_torch).
+				_, t_init = _point_to_polyline_distance_and_param_torch(pts, poly_t)
+				cp = torch.as_tensor(side_control_points[side_idx], device=device, dtype=dtype)
+				dists.append(_refine_closest_point_on_cubic_torch(pts, cp[0], cp[1], cp[2], cp[3], t_init))
+			else:
+				dists.append(_point_to_polyline_distance_torch(pts, poly_t))
 		distances = torch.stack(dists, dim=1)
 
 		if use_sign:

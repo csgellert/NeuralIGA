@@ -1027,12 +1027,17 @@ def collocation_2d(
         gB = gB.detach().cpu().numpy().reshape(xB.shape) 
         gB_lp = gB_lp.detach().cpu().numpy().reshape(xB.shape)
     elif bundary_enforcement == "lightning":
-        if function_case != 11:
-            raise ValueError("bundary_enforcement='lightning' is currently only supported for function_case=11.")
+        if function_case not in (11, 12):
+            raise ValueError("bundary_enforcement='lightning' is currently only supported for function_case=11 or 12.")
         import lightning_laplace
-        sol = lightning_laplace.solve_case_11(tolerance = 1e-6)
+        sol = lightning_laplace.solve_case_11(tolerance=1e-6) if function_case == 11 \
+            else lightning_laplace.solve_case_12(tolerance=1e-6)
         gB = sol(xB_phys, yB_phys).reshape(xB.shape)
-        gB_lp = np.zeros_like(xB)  # Set gB_lp to zero for now, as a placeholder #!todo
+        # Exactly zero, not a placeholder: the lightning lifting is (the real
+        # part of) a holomorphic function solving Delta(u)=0 by construction,
+        # so its Laplacian vanishes identically regardless of boundary fit
+        # residual (see LightningLaplaceSolution.laplacian).
+        gB_lp = np.zeros_like(xB)
     elif bundary_enforcement == "none":
         gB = np.zeros_like(xB)  # Set gB to zero for now, as a placeholder #!todo
         gB_lp = np.zeros_like(xB)  # Set gB_lp to zero for now, as a placeholder #!todo
@@ -1248,10 +1253,11 @@ def reconstruct_collocation_at_points(
             lifting = ihbnd.get_lifting(model=model_ms,function_case = function_case, num_sides=5, points = lift_points).detach().cpu().numpy()
             u_h += lifting
         elif lifting_method == "lightning":
-            if function_case != 11:
-                raise ValueError("lifting_method='lightning' is currently only supported for function_case=11.")
+            if function_case not in (11, 12):
+                raise ValueError("lifting_method='lightning' is currently only supported for function_case=11 or 12.")
             import lightning_laplace
-            sol = lightning_laplace.solve_case_11(tolerance = 1e-6)
+            sol = lightning_laplace.solve_case_11(tolerance=1e-6) if function_case == 11 \
+                else lightning_laplace.solve_case_12(tolerance=1e-6)
             lifting = sol(pts_x, pts_y)
             u_h += lifting
         elif lifting_method == "none":

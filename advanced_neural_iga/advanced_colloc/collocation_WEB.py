@@ -1017,6 +1017,8 @@ def collocation_2d(
     # transform to physical coordinates if domain is specified
     if domain is not None:
         xB_phys, yB_phys = transform_to_physical(xB, yB)
+    else:
+        xB_phys, yB_phys = xB, yB
     points = torch.tensor(np.column_stack((xB_phys.flatten(), yB_phys.flatten())), dtype=torch.float64)
     #gB = ihbnd.get_lifting(model=model,function_case = function_case, num_sides=5, points = points).detach().cpu().numpy().reshape(xB.shape)
 
@@ -1025,6 +1027,8 @@ def collocation_2d(
         gB = gB.detach().cpu().numpy().reshape(xB.shape) 
         gB_lp = gB_lp.detach().cpu().numpy().reshape(xB.shape)
     elif bundary_enforcement == "lightning":
+        if function_case != 11:
+            raise ValueError("bundary_enforcement='lightning' is currently only supported for function_case=11.")
         import lightning_laplace
         sol = lightning_laplace.solve_case_11(tolerance = 1e-6)
         gB = sol(xB_phys, yB_phys).reshape(xB.shape)
@@ -1044,8 +1048,6 @@ def collocation_2d(
         gB_lp = gB_lp.detach().cpu().numpy().reshape(xB.shape)
     else: 
         raise ValueError(f"Unknown boundary enforcement method: {bundary_enforcement}")
-
-    print("line 1081 -> fiy this later!!! ")
 
     # Δ_phys((1-w)g) in grid derivatives:
     #   ax * (-(wxx)g - 2 wx gx + (1-w) gxx) + ay * (-(wyy)g - 2 wy gy + (1-w) gyy)
@@ -1158,6 +1160,7 @@ def collocation_2d(
             'dim_B': dim_B,
             'bw': bw,
             'domain': domain,
+            'function_case': function_case,
         }
         return Uxy_total, xB, yB, con, dim_sys, rtimes, recon_info
 
@@ -1174,7 +1177,8 @@ def reconstruct_collocation_at_points(
     recon_info: Dict,
     wfct_phys: 'NeuralWeightFunction',
     model_ms: Optional[torch.nn.Module] = None,
-    lifting_method: Optional[str] = "get_lifting"
+    lifting_method: Optional[str] = "get_lifting",
+    function_case: Optional[int] = None,
 ) -> np.ndarray:
     """Evaluate collocation solution at arbitrary physical-coordinate points.
 
@@ -1207,6 +1211,8 @@ def reconstruct_collocation_at_points(
     H = recon_info['H']
     dim_B = recon_info['dim_B']
     domain = recon_info['domain']
+    if function_case is None:
+        function_case = int(recon_info.get('function_case', PDE_testcases.FUNCTION_CASE))
 
     # Map physical coords to grid coords [0,1]
     if domain is not None:
@@ -1237,10 +1243,13 @@ def reconstruct_collocation_at_points(
     u_h = np.maximum(w_vals, 0.0) * v 
 
     if model_ms is not None:
+        lift_points = torch.tensor(np.column_stack((pts_x, pts_y)), dtype=torch.float64)
         if lifting_method == "get_lifting":
-            lifting = ihbnd.get_lifting(model=model_ms,function_case = 11, num_sides=5, points = torch.tensor(np.column_stack((pts_x, pts_y)), dtype=torch.float64)).detach().cpu().numpy()
+            lifting = ihbnd.get_lifting(model=model_ms,function_case = function_case, num_sides=5, points = lift_points).detach().cpu().numpy()
             u_h += lifting
         elif lifting_method == "lightning":
+            if function_case != 11:
+                raise ValueError("lifting_method='lightning' is currently only supported for function_case=11.")
             import lightning_laplace
             sol = lightning_laplace.solve_case_11(tolerance = 1e-6)
             lifting = sol(pts_x, pts_y)
@@ -1248,12 +1257,12 @@ def reconstruct_collocation_at_points(
         elif lifting_method == "none":
             pass  # No lifting applied
         elif lifting_method == "wachspress":
-            lifting = ihbnd.get_lifting_polygon(model=model_ms,function_case = 11, num_sides=5, points = torch.tensor(np.column_stack((pts_x, pts_y)), dtype=torch.float64),
+            lifting = ihbnd.get_lifting_polygon(model=model_ms,function_case = function_case, num_sides=5, points = lift_points,
                                               smoothness=1, blend_method="wachspress", eps=1e-12, return_laplacian=False)
             lifting = lifting.detach().cpu().numpy()
             u_h += lifting
         elif lifting_method == "coons":
-            lifting = ihbnd.get_lifting_polygon(model=model_ms,function_case = 11, num_sides=5, points = torch.tensor(np.column_stack((pts_x, pts_y)), dtype=torch.float64),
+            lifting = ihbnd.get_lifting_polygon(model=model_ms,function_case = function_case, num_sides=5, points = lift_points,
                                             smoothness=1, blend_method="coons", eps=1e-12, return_laplacian=False)
             lifting = lifting.detach().cpu().numpy()
             u_h += lifting

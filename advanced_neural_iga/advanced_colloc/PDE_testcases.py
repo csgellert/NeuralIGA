@@ -14,6 +14,58 @@ FUNCTION_CASE = 11
 # Active geometry model used by manufactured testcases (set inside GaussQuadrature).
 ACTIVE_MODEL: Optional[torch.nn.Module] = None
 
+# =============================================================================
+# Pentagon boundary geometry for FUNCTION_CASE 11/12 (5-sided domains)
+# =============================================================================
+# radius/center/rotation place the 5 corners; for sides listed in
+# curved_side_indices the span bulges inward as a cubic Bezier-equivalent
+# curve (see inhomogenous_boundary._build_polygon_boundary_data), all other
+# sides stay straight. Case 11 is an all-straight pentagon inscribed in the
+# unit circle; case 12 is the same pentagon with 3 curved and 2 straight sides.
+# IMPORTANT: whatever per-side distance model is passed to get_lifting /
+# get_lifting_polygon (inhomogenous_boundary.py) must be built with this same
+# rotation, otherwise its side order will not line up with the Dirichlet data
+# prescribed below and side i's distance will be blended against the wrong
+# side's boundary value.
+#
+# side_placement chooses how inhomogenous_boundary picks, for a given query
+# point, the representative point on side i at which the Dirichlet formula is
+# evaluated:
+# - "distance_ratio": case 11's original scheme. Placed by a ratio of the
+#   model's own raw side distances (see inhomogenous_boundary._ratio_side_param),
+#   not an actual nearest-point projection. Kept exactly as originally
+#   validated (e.g. against the case-11 CSV ground truth) -- do not change
+#   this to "nearest_point" without re-validating, it measurably shifts
+#   lifting values away from that ground truth.
+# - "nearest_point": case 12's original (and more geometrically standard)
+#   scheme, projecting onto a sampled polyline of the side curve.
+CASE_POLYGON_GEOMETRY = {
+    11: {
+        "radius": 1.0, "center": (0.0, 0.0), "rotation": 0.0, "bulge": 0.0,
+        "samples_per_side": 128, "curved_side_indices": (), "side_placement": "distance_ratio",
+    },
+    12: {
+        "radius": 0.5, "center": (0.0, 0.0), "rotation": 0.0, "bulge": 0.18,
+        "samples_per_side": 128, "curved_side_indices": (0, 2, 4), "side_placement": "nearest_point",
+    },
+}
+
+# Sides forced to zero Dirichlet data, keyed by FUNCTION_CASE. This is the
+# single place that assigns per-side boundary values for the pentagon cases;
+# edit it (and dirichletBoundary_side_vectorized below) to reassign boundary
+# data without touching inhomogenous_boundary.py.
+CASE_SIDE_ZERO_DIRICHLET = {
+    11: (0, 4),
+    12: (1, 3),
+}
+
+
+def get_case_polygon_geometry(function_case: int) -> dict:
+    """Pentagon side geometry (radius/center/rotation/bulge/curved sides)."""
+    if function_case not in CASE_POLYGON_GEOMETRY:
+        raise NotImplementedError(f"No polygon geometry defined for FUNCTION_CASE={function_case}.")
+    return CASE_POLYGON_GEOMETRY[function_case]
+
 
 def _transform_scalar_and_derivs(
     d_raw: torch.Tensor, transform: Optional[str]
@@ -134,7 +186,7 @@ def get_domain_for_case(function_case: int) -> dict:
         return {"x1": -1.0, "x2": 1.0, "y1": -1.0, "y2": 1.0}
     if function_case == 8:
         return {"x1": -4.0, "x2": 4.0, "y1": -3.0, "y2": 3.0}
-    if function_case == 11:
+    if function_case in (11, 12):
         return {"x1": -1, "x2": 1, "y1": -1, "y2": 1}
     raise NotImplementedError(f"Unknown FUNCTION_CASE={function_case}")
 
@@ -204,6 +256,8 @@ def load_function_vectorized(x, y):
         return -(2.0 * (wx ** 2 + wy ** 2) + 2.0 * w * (wxx + wyy))
     elif FUNCTION_CASE == 11:
         return np.sin(y * np.pi)
+    elif FUNCTION_CASE == 12:
+        return np.sin(y * np.pi)
     else:
         raise NotImplementedError
 
@@ -229,8 +283,35 @@ def dirichletBoundary_vectorized(x, y):
         return np.zeros_like(x)
     elif FUNCTION_CASE == 11:
         return 1**2 - (x**2 + y**2)
-    else: 
+    elif FUNCTION_CASE == 12:
+        return 1**2 - (x**2 + y**2)
+    else:
         raise NotImplementedError
+
+def dirichletBoundary_side_vectorized(x, y, side_idx):
+    """Per-side Dirichlet data for the 5-sided FUNCTION_CASE 11/12 domains.
+
+    Starts from ``dirichletBoundary_vectorized`` and forces the sides listed
+    in ``CASE_SIDE_ZERO_DIRICHLET[FUNCTION_CASE]`` to zero.
+
+    Accepts either numpy arrays or torch tensors for x/y (cases 11/12's
+    Dirichlet formula is plain arithmetic, so dirichletBoundary_vectorized
+    works unchanged either way). Torch input keeps its autograd graph, which
+    inhomogenous_boundary.py's "distance_ratio" side placement (case 11)
+    relies on for the boundary lifting function's exact Laplacian.
+    """
+    vals = dirichletBoundary_vectorized(x, y)
+    zero_sides = CASE_SIDE_ZERO_DIRICHLET.get(FUNCTION_CASE)
+    if not zero_sides:
+        return vals
+    if torch.is_tensor(vals):
+        side_idx_t = side_idx if torch.is_tensor(side_idx) else torch.as_tensor(side_idx, device=vals.device)
+        zero_mask = torch.zeros_like(side_idx_t, dtype=torch.bool)
+        for side in zero_sides:
+            zero_mask = zero_mask | (side_idx_t == side)
+        return torch.where(zero_mask, torch.zeros_like(vals), vals)
+    zero_mask = np.isin(np.asarray(side_idx), zero_sides)
+    return np.where(zero_mask, 0.0, vals)
 
 def dirichletBoundaryDerivativeX_vectorized(x, y):
     """Vectorized version of dirichletBoundaryDerivativeX"""
@@ -246,6 +327,8 @@ def dirichletBoundaryDerivativeX_vectorized(x, y):
         return np.zeros_like(x)
     elif FUNCTION_CASE in (9, 10):
         return np.zeros_like(x)
+    elif FUNCTION_CASE == 12:
+        return -2.0 * x
     else: 
         raise NotImplementedError
 
@@ -263,6 +346,8 @@ def dirichletBoundaryDerivativeY_vectorized(x, y):
         return np.zeros_like(x)
     elif FUNCTION_CASE in (9, 10):
         return np.zeros_like(x)
+    elif FUNCTION_CASE == 12:
+        return -2.0 * y
     else: 
         raise NotImplementedError
 
@@ -314,7 +399,7 @@ def solution_function(x,y):
             raise RuntimeError("ACTIVE_MODEL is not set for FUNCTION_CASE 9/10.")
         w, *_ = _eval_weight_and_hessian_diag_np(x, y, ACTIVE_MODEL, transform=mesh.TRANSFORM)
         return w ** 2
-    elif FUNCTION_CASE == 11:
+    elif FUNCTION_CASE in (11, 12):
         return np.zeros_like(x)  # Placeholder for the solution function in case 11
     else: raise NotImplementedError
 def solution_function_derivative_x(x,y):

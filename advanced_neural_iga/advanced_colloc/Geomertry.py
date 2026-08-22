@@ -5,7 +5,7 @@ from typing import Optional
 from bspline import Bspline
 from torch import nn
 import torch
-
+import multi_SDF
 bsp=None
 dbps = None
 
@@ -589,6 +589,84 @@ class AnaliticalDistancePentagon_RFunction(nn.Module):
       plt.title(title)
       plt.show()
 
+class AnaliticalDistance_case_12_MS(nn.Module):
+      def __init__(self):
+         super().__init__()
+         self.radius =  0.5
+         self.center = (0.0, 0.0)
+         self.rotation =  0.0
+         self.bulge = 0.18
+         self.samples_per_side = 128
+         self.curved_side_indices = (0, 2, 4)  
+                 
+      def forward(self, crd: torch.Tensor) -> torch.Tensor:
+         """Signed distances to each of the 5 sides of the mixed pentagon.
+
+         Mirrors ``AnaliticalDistancePentagon_SideDistances``: accepts ``crd``
+         of shape ``(..., 2)`` (flat point batches or a coordinate grid) and
+         returns shape ``(..., 5)``, positive inside the domain, negative
+         outside, and zero on the corresponding side. Kept as pure torch ops
+         (no numpy round-trip) so autograd can differentiate through it, as
+         required by ``NeuralWeightFunction`` in collocation_WEB.py.
+         """
+         x = crd[..., 0]
+         y = crd[..., 1]
+         distances = multi_SDF.mixed_pentagon_bspline_side_distances(
+                                       x.reshape(-1),
+                                       y.reshape(-1),
+                                       radius=self.radius,
+                                       center=self.center,
+                                       rotation=self.rotation,
+                                       bulge=self.bulge,
+                                       samples_per_side=self.samples_per_side,
+                                       curved_side_indices=self.curved_side_indices,
+                                       use_sign=True,
+                                       return_numpy=False,
+                                   )
+         return distances.reshape(*x.shape, 5)
+      
+      def as_weight_model(
+         self,
+         smoothness: float = 0.1,
+         preserve_zero_line: bool = True,
+      ) -> nn.Module:
+         """Return a scalar pentagon weight model built from the 5 side distances.
+   
+         This adapter matches the interface expected by ``run_example`` and the
+         existing neural-model-based boundary workflow: it reduces the five side
+         distances to a single smooth weight function.
+         """
+         return AnaliticalDistancePentagon_SideDistances_Weight(
+            self,
+            smoothness=smoothness,
+            preserve_zero_line=preserve_zero_line,
+         )
+   
+      def create_contour_plot(self, resolution=200):
+         x = np.linspace(-1.01, 1.01, resolution)
+         y = np.linspace(-1.01, 1.01, resolution)
+         X, Y = np.meshgrid(x, y)
+         crd = torch.tensor(np.stack([X, Y], axis=-1), dtype=torch.float32)
+         with torch.no_grad():
+            Z = self.forward(crd).cpu().numpy()
+   
+         fig, axes = plt.subplots(2, 3, figsize=(13, 8), constrained_layout=True)
+         axes = axes.ravel()
+   
+         for side_idx in range(5):
+            ax = axes[side_idx]
+            contour = ax.contourf(X, Y, Z[..., side_idx], levels=50, cmap='viridis')
+            ax.contour(X, Y, Z[..., side_idx], levels=[0], colors='k', linewidths=1)
+            ax.set_title(f'Pentagon side distance {side_idx + 1}')
+            ax.set_xlabel('x')
+            ax.set_ylabel('y')
+            ax.set_aspect('equal', adjustable='box')
+            fig.colorbar(contour, ax=ax, fraction=0.046, pad=0.04)
+   
+         axes[5].axis('off')
+         fig.suptitle('Analytical pentagon side distances', y=1.02)
+         plt.show()
+      
 
 class AnaliticalDistancePentagon_SideDistances(nn.Module):
    """Analytical 5-output pentagon distance model.
@@ -1030,6 +1108,8 @@ class AnaliticalDistanceEllipsePentagon_RFunction(nn.Module):
 
 
 if __name__ == "__main__":
-   analitical_model2 = AnaliticalDistanceLshape()
-   model = analitical_model2
-   model.create_contour_plot(resolution=100)
+   #analitical_model2 = AnaliticalDistanceLshape()
+   #model = analitical_model2
+   #model.create_contour_plot(resolution=100)
+   model = AnaliticalDistance_case_12_MS()
+   model.create_contour_plot(resolution=200)

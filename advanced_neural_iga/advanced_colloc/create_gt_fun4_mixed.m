@@ -22,6 +22,7 @@ vertices = [center(1) + radius * cos(angles);
 
 t_vals = linspace(0, 1, samples_per_side + 1)';  % Parameter values
 boundary_points = [];
+boundary_side_indices = [];
 
 for i = 0:n_sides-1
     v0 = vertices(:, i+1);
@@ -55,18 +56,22 @@ for i = 0:n_sides-1
     
     % Exclude the last point to avoid duplication at vertices
     boundary_points = [boundary_points; side_curve(1:end-1, :)];
+    boundary_side_indices = [boundary_side_indices; repmat(i, samples_per_side, 1)];
 end
 
 % Remove nearly-duplicate points to avoid polyshape warnings
 tolerance = 1e-10;
 unique_points = boundary_points(1, :);
+unique_side_indices = boundary_side_indices(1);
 for i = 2:size(boundary_points, 1)
     dist_to_last = norm(boundary_points(i, :) - unique_points(end, :));
     if dist_to_last > tolerance
         unique_points = [unique_points; boundary_points(i, :)];
+        unique_side_indices = [unique_side_indices; boundary_side_indices(i)];
     end
 end
 boundary_points = unique_points;
+boundary_side_indices = unique_side_indices;
 
 % Create a polygon from the boundary points
 polygon = polyshape(boundary_points(:,1), boundary_points(:,2));
@@ -109,6 +114,19 @@ dl = decsg(gd, sf, ns);
 % Create geometry from edges
 geometryFromEdges(model, dl);
 
+if model.Geometry.NumEdges ~= length(boundary_side_indices)
+    error('Unexpected PDE edge count: expected %d, got %d.', ...
+        length(boundary_side_indices), model.Geometry.NumEdges);
+end
+
+side_edge_ids = cell(1, n_sides);
+for side = 0:n_sides-1
+    side_edge_ids{side + 1} = find(boundary_side_indices == side);
+end
+curved_edge_ids = [side_edge_ids{curved_side_indices + 1}];
+straight_side_indices = setdiff(0:n_sides-1, curved_side_indices);
+straight_edge_ids = [side_edge_ids{straight_side_indices + 1}];
+
 % Visualize geometry
 figure
 pdegplot(model, 'EdgeLabels', 'on')
@@ -126,11 +144,19 @@ specifyCoefficients(model, ...
     'c', 1, ...
     'a', 0, ...
     'f', fFun);
-
+%% Prescribe inhomogenoous bc
+fFun2 = @(location,state) ...
+    1^2-(location.x^2+location.y^2);
 %% Apply boundary conditions
-% Dirichlet: u = 0 on all boundaries
-applyBoundaryCondition(model, 'dirichlet', 'Edge', 1:model.Geometry.NumEdges, 'u', 0);
-
+% Dirichlet: u = 0 on straight sides and u = fFun2 on curved sides
+applyBoundaryCondition(model,...
+    'dirichlet',...
+    'Edge',straight_edge_ids,...
+    'u',0);
+applyBoundaryCondition(model,...
+    'dirichlet',...
+    'Edge',curved_edge_ids,...
+    'u',fFun2);%0
 %% Generate mesh
 generateMesh(model, 'Hmax', 0.01);
 
@@ -143,7 +169,7 @@ fprintf('Number of mesh elements: %d\n', numElements);
 fprintf('Number of mesh nodes: %d\n', size(model.Mesh.Nodes, 2));
 drawnow
 
-%% Solve PDE (Laplace equation with homogeneous Dirichlet BC)
+%% Solve PDE (Laplace equation with mixed Dirichlet BC)
 fprintf('Solving PDE...\n');
 result = solvepde(model);
 
@@ -209,6 +235,8 @@ fprintf('Total sampled: %d points\n', length(xrand));
 %% Interpolate solution at sampled points
 fprintf('Interpolating solution at sampled points...\n');
 uq = interpolateSolution(result, xrand, yrand);
+[ux, uy] = evaluateGradient(result, xrand, yrand);
+gradient_magnitude = sqrt(ux.^2 + uy.^2);
 
 %% Prepare and save data
 data = [double(xrand), double(yrand), double(uq)];
@@ -228,6 +256,23 @@ fclose(fid);
 fprintf('Done! Data saved to %s\n', output_filename);
 fprintf('Data dimensions: %d samples x 3 columns\n', size(data, 1));
 
+gradient_data = [double(xrand), double(yrand), double(gradient_magnitude)];
+gradient_output_filename = 'poisson_samples_fun4_mixed_pentagon_gradient.csv';
+fprintf('Saving gradient magnitudes to: %s\n', gradient_output_filename);
+
+fid = fopen(gradient_output_filename, 'w');
+fprintf(fid, 'x,y,gradient_magnitude\n');
+
+for k = 1:size(gradient_data, 1)
+    fprintf(fid, '%.17g,%.17g,%.17g\n', ...
+        gradient_data(k,1), gradient_data(k,2), gradient_data(k,3));
+end
+
+fclose(fid);
+
+fprintf('Done! Gradient data saved to %s\n', gradient_output_filename);
+fprintf('Gradient data dimensions: %d samples x 3 columns\n', size(gradient_data, 1));
+
 % Summary
 fprintf('\n========== SUMMARY ==========\n');
 fprintf('Geometry: Mixed Pentagon (fun_num=4)\n');
@@ -237,9 +282,12 @@ fprintf('  - Rotation: %.4f rad\n', rotation);
 fprintf('  - Bulge (curvature): %.4f\n', bulge);
 fprintf('  - Curved sides: 0, 2, 4\n');
 fprintf('  - Straight sides: 1, 3\n');
+fprintf('  - Curved PDE edges: %d\n', length(curved_edge_ids));
+fprintf('  - Straight PDE edges: %d\n', length(straight_edge_ids));
 fprintf('  - Samples per side: %d\n', samples_per_side);
 fprintf('PDE: Laplace equation, u=0 on boundary\n');
 fprintf('Mesh: %d elements, %d nodes\n', numElements, size(model.Mesh.Nodes, 2));
 fprintf('Data: %d sample points\n', N);
 fprintf('Output file: %s\n', output_filename);
+fprintf('Gradient output file: %s\n', gradient_output_filename);
 fprintf('=============================\n');
